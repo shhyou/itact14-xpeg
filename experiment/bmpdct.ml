@@ -43,8 +43,8 @@ let bmp_file_hdr_of_channel ci =
   really_input ci buffer 0 14;
   match (buffer.[0], buffer.[1]) with
     ('B', 'M') -> { file_type = (buffer.[0], buffer.[1])
-                      ; bmp_filesize = int_of_char4 2
-                      ; offset = int_of_char4 10 }
+                  ; bmp_filesize = int_of_char4 2
+                  ; offset = int_of_char4 10 }
   | (m0, m1) -> raise (BitmapFormatNotSupported (m0, m1))
 
 let bmp_info_hdr_of_channel ci =
@@ -54,7 +54,9 @@ let bmp_info_hdr_of_channel ci =
    (List.mapi (fun i base -> int_of_char buffer.[idx + i] * base)
     [1; 256; 256*256; 256*256*256]) in
   really_input ci buffer 0 12;
-  { bmp_info_hdrsize = int_of_char4 0; width = int_of_char4 4; height = int_of_char4 8; }
+  { bmp_info_hdrsize = int_of_char4 0
+  ; width = int_of_char4 4
+  ; height = int_of_char4 8; }
 
 let bmp_of_channel ci =
   let bf_hdr = bmp_file_hdr_of_channel ci in
