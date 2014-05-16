@@ -71,13 +71,13 @@ let output_bmp co bmp =
                          ; bmp_filesize = file_size
                          ; offset = 14 + 40 };
   output_bmp_info_hdr co bmp.info;
-  let row_padding = row_size - bmp.info.width * 3 in
+  let row_padding = String.make (row_size - bmp.info.width * 3) '\x00' in
   Array.iter (fun row ->
     Array.iter (fun (r,g,b) ->
       output_char co b;
       output_char co g;
       output_char co r) row;
-    ()) bmp.bits;;
+    output_string co row_padding) bmp.bits;;
 
 let make_bmp height width =
   { info = { bmp_info_hdrsize = 40; width = width; height = height }
