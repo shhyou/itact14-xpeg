@@ -51,18 +51,19 @@ let output_bmp_file_hdr co bfh =
   List.iter (output_char co) (char4_of_int bfh.offset);;
 
 let output_bmp_info_hdr co bih =
-  (* 4 *) List.iter (output_char co) (char4_of_int bih.bmp_info_hdrsize);
-  (* 4 *) List.iter (output_char co) (char4_of_int bih.width);
-  (* 4 *) List.iter (output_char co) (char4_of_int bih.height);
-  (* 2 *) output_char co '\x01'; output_char co '\x00'; (* # of color planes *)
-  (* 2 *) output_char co '\x18'; output_char co '\x00'; (* # of bits per pixel *)
-  (* 4 *) List.iter (output_char co) (char4_of_int 0);  (* BI_RGB *)
+  let puts = List.iter (output_char co) in
+  (* 4 *) puts (char4_of_int bih.bmp_info_hdrsize);
+  (* 4 *) puts (char4_of_int bih.width);
+  (* 4 *) puts (char4_of_int bih.height);
+  (* 2 *) puts ['\x01'; '\x00'];  (* # of color planes *)
+  (* 2 *) puts ['\x18'; '\x00'];  (* # of bits per pixel *)
+  (* 4 *) puts (char4_of_int 0);  (* BI_RGB *)
           let row_size = (bih.width * 24 + 31) / 32 * 4 in
-  (* 4 *) List.iter (output_char co) (char4_of_int (row_size * bih.height));
-  (* 4 *) List.iter (output_char co) (char4_of_int 0);  (* v-resolution *)
-  (* 4 *) List.iter (output_char co) (char4_of_int 0);  (* h-resolution *)
-  (* 4 *) List.iter (output_char co) (char4_of_int 0);  (* # of colors in the palatte *)
-  (* 4 *) List.iter (output_char co) (char4_of_int 0);; (* # of important colors *)
+  (* 4 *) puts (char4_of_int (row_size * bih.height));
+  (* 4 *) puts (char4_of_int 0);  (* v-resolution *)
+  (* 4 *) puts (char4_of_int 0);  (* h-resolution *)
+  (* 4 *) puts (char4_of_int 0);  (* # of colors in the palatte *)
+  (* 4 *) puts (char4_of_int 0);; (* # of important colors *)
 
 let output_bmp co bmp =
   let row_size = (bmp.info.width * 24 + 31) / 32 * 4 in
