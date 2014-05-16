@@ -4,6 +4,14 @@ let rec range begin_ end_ = if begin_ < end_
                               then begin_ :: range (begin_ + 1) end_
                               else [];;
 
+(* transpose a **square** matrix *)
+let rec transpose = function
+    [] -> []
+  | xs :: xss -> let row1 = List.map List.hd xss in
+                 let submatrix = transpose (List.map List.tl xss) in
+                 let cons a b = a :: b in
+                 List.map2 cons xs (row1 :: submatrix)
+
 (*  char4_of_int int -> char list  *)
 let char4_of_int n =
   List.map (fun i -> char_of_int (n/i mod 256))
@@ -128,11 +136,14 @@ let bmp_in =
 let (dct1, idct1) =
   let sumf = List.fold_left (+.) 0.0 in
   let pi = acos (-1.0) in
-  let angle n k = cos (pi *. (float_of_int n +. 0.5) *. float_of_int k /. 16.0) in
+  let normalize_factor = sqrt (2.0 /. 8.0) in
+  let angle n k = cos (pi *. (float_of_int n +. 0.5) *. float_of_int k /. 8.0) in
   let cos_vecs f = List.map (fun k ->
                      List.map (fun n ->
-                       f n k) (range 1 17)) (range 1 17) in
+                       f n k *. normalize_factor) (range 0 8)) (range 0 8) in
   let dct_vecs = cos_vecs angle in
-  let idct_vecs = cos_vecs (fun n k -> angle k n) in
+  let idct_vecs =
+    let fix_x0_coef (_::xs) = 0.5 *. normalize_factor::xs in
+    List.map fix_x0_coef (cos_vecs (fun n k -> angle k n)) in
   ( (fun v -> List.map (fun u -> sumf (List.map2 ( *. ) v u)) dct_vecs)
   , (fun v -> List.map (fun u -> sumf (List.map2 ( *. ) v u)) idct_vecs) )
