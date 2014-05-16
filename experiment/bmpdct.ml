@@ -34,7 +34,7 @@ type bmp = {
 
 exception BitmapFormatNotSupported of char * char;;
 
-let bmp_file_hdr_of_channel ci =
+let input_bmp_file_hdr ci =
   let buffer = String.create 14 in
   let int_of_char4 idx =
     List.fold_left (+) 0
@@ -47,7 +47,7 @@ let bmp_file_hdr_of_channel ci =
                   ; offset = int_of_char4 10 }
   | (m0, m1) -> raise (BitmapFormatNotSupported (m0, m1))
 
-let bmp_info_hdr_of_channel ci =
+let input_bmp_info_hdr ci =
   let buffer = String.create 12 in
   let int_of_char4 idx =
     List.fold_left (+) 0
@@ -58,9 +58,9 @@ let bmp_info_hdr_of_channel ci =
   ; width = int_of_char4 4
   ; height = int_of_char4 8; }
 
-let bmp_of_channel ci =
-  let bf_hdr = bmp_file_hdr_of_channel ci in
-  let bi_hdr = bmp_info_hdr_of_channel ci in
+let input_bmp ci =
+  let bf_hdr = input_bmp_file_hdr ci in
+  let bi_hdr = input_bmp_info_hdr ci in
   let row_size = (bi_hdr.width * 24 + 31) / 32 * 4 in
   let bits = Array.make_matrix bi_hdr.width bi_hdr.height ('\x00','\x00','\x00') in
   Array.iteri (fun y arr ->
@@ -77,7 +77,7 @@ let output_file = "testout.bmp";;
 
 let bmp_in =
   let fin = open_in_bin input_file in
-  let bmp = bmp_of_channel fin in
+  let bmp = input_bmp fin in
   close_in fin;
   bmp
 
