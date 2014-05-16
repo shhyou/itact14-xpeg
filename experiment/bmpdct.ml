@@ -124,15 +124,6 @@ let input_bmp ci =
       arr.(x) <- (r, g, b)) arr) bits;
   { info = bi_hdr; bits = bits }
 
-let input_file = "test.bmp";;
-let output_file = "testout.bmp";;
-
-let bmp_in =
-  let fin = open_in_bin input_file in
-  let bmp = input_bmp fin in
-  close_in fin;
-  bmp
-
 let (dct1, idct1) =
   let sumf = List.fold_left (+.) 0.0 in
   let pi = acos (-1.0) in
@@ -147,3 +138,13 @@ let (dct1, idct1) =
     List.map fix_x0_coef (cos_vecs (fun n k -> angle k n)) in
   ( (fun v -> List.map (fun u -> sumf (List.map2 ( *. ) v u)) dct_vecs)
   , (fun v -> List.map (fun u -> sumf (List.map2 ( *. ) v u)) idct_vecs) )
+
+let input_file = "test.bmp";;
+let output_file = "testout.bmp";;
+
+let bmp_in =
+  let fin = open_in_bin input_file in
+  let bmp = input_bmp fin in
+  close_in fin;
+  bmp
+
