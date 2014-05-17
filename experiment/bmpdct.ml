@@ -1,5 +1,7 @@
 (* prelude *)
 
+let flip f x y = f y x;;
+
 let rec range begin_ end_ = if begin_ < end_
                               then begin_ :: range (begin_ + 1) end_
                               else [];;
@@ -115,13 +117,13 @@ let input_bmp ci =
   let bi_hdr = input_bmp_info_hdr ci in
   let row_size = (bi_hdr.width * 24 + 31) / 32 * 4 in
   let bits = Array.make_matrix bi_hdr.width bi_hdr.height ('\x00','\x00','\x00') in
-  Array.iteri (fun y arr ->
+  flip Array.iteri bits (fun y arr ->
     seek_in ci (bf_hdr.offset + y * row_size);
-    Array.iteri (fun x _ ->
+    flip Array.iteri arr (fun x _ ->
       let b = input_char ci in
       let g = input_char ci in
       let r = input_char ci in
-      arr.(x) <- (r, g, b)) arr) bits;
+      arr.(x) <- (r, g, b)));
   { info = bi_hdr; bits = bits }
 
 let (dct1, dct_vecs, idct1, idct_vecs) =
@@ -129,9 +131,9 @@ let (dct1, dct_vecs, idct1, idct_vecs) =
   let pi = acos (-1.0) in
   let normalize_factor = sqrt (2.0 /. 8.0) in
   let angle n k = cos (pi *. (float_of_int n +. 0.5) *. float_of_int k /. 8.0) in
-  let cos_vecs f = List.map (fun k ->
-                     List.map (fun n ->
-                       f n k *. normalize_factor) (range 0 8)) (range 0 8) in
+  let cos_vecs f = flip List.map (range 0 8) (fun k ->
+                     flip List.map (range 0 8) (fun n ->
+                       f n k *. normalize_factor)) in
   let dct_vecs = cos_vecs angle in
   let idct_vecs =
     let fix_x0_coef (_::xs) = 0.5 *. normalize_factor::xs in
@@ -153,19 +155,17 @@ let bmp_in =
 let bmp_dct = let size = 8 * 8 * 4 + 7 in make_bmp size size;;
 
 let () =
-  List.iteri (fun i u ->
-    List.iteri (fun j v ->  (* maps [-1.0, 1.0] to [0.0,255.0] *)
+  flip List.iteri dct_vecs (fun i u ->
+    flip List.iteri dct_vecs (fun j v -> (* maps [-1.0, 1.0] to [0.0,255.0] *)
     ( let char_of_float f = char_of_int (int_of_float ((f +. 1.0) *. 127.5)) in
       let (y0, x0) = (i*(4*8 + 1), j*(4*8 + 1)) in
       let set_color y x color =
-        List.iter (fun dy ->
-          List.iter (fun dx ->
-            bmp_dct.bits.(y + dy).(x + dx) <- (color, color, color))
-          [0;1;2;3]) [0;1;2;3] in
-      List.iteri (fun dy ui ->
-        List.iteri (fun dx vj ->
-          set_color (y0 + dy * 4) (x0 + dx * 4) (char_of_float (ui *. vj))) u) v))
-        dct_vecs) dct_vecs;
+        flip List.iter [0;1;2;3] (fun dy ->
+          flip List.iter [0;1;2;3] (fun dx ->
+            bmp_dct.bits.(y + dy).(x + dx) <- (color, color, color))) in
+      flip List.iteri v (fun dy ui ->
+        flip List.iteri u (fun dx vj ->
+          set_color (y0 + dy * 4) (x0 + dx * 4) (char_of_float (ui *. vj)))))));
 
   let fout = open_out_bin "dct2.bmp" in
   output_bmp fout bmp_dct;
