@@ -150,7 +150,7 @@ let bmp_in =
   close_in fin;
   bmp
 
-let bmp_out = let size = 8 * 8 * 4 + 7 in make_bmp size size;;
+let bmp_dct = let size = 8 * 8 * 4 + 7 in make_bmp size size;;
 
 let () =
   List.iteri (fun i u ->
@@ -160,7 +160,7 @@ let () =
       let set_color y x color =
         List.iter (fun dy ->
           List.iter (fun dx ->
-            bmp_out.bits.(y + dy).(x + dx) <- (color, color, color))
+            bmp_dct.bits.(y + dy).(x + dx) <- (color, color, color))
           [0;1;2;3]) [0;1;2;3] in
       List.iteri (fun dy ui ->
         List.iteri (fun dx vj ->
@@ -168,5 +168,5 @@ let () =
         dct_vecs) dct_vecs;
 
   let fout = open_out_bin "dct2.bmp" in
-  output_bmp fout bmp_out;
+  output_bmp fout bmp_dct;
   close_out fout;;
