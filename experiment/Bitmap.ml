@@ -18,13 +18,13 @@ module L = List;;
 (*  char4_of_int int -> char list  *)
 let char4_of_int n =
   L.map (fun i -> char_of_int (n/i mod 256))
-  [1; 256; 256*256; 256*256*256]
+  [1; 256; 256*256; 256*256*256];;
 
 (*  int_of_char4 : string -> int -> int  *)
 let int_of_char4 buffer idx =
   L.fold_left (+) 0
  (L.mapi (fun i base -> int_of_char buffer.[idx + i] * base)
-  [1; 256; 256*256; 256*256*256])
+  [1; 256; 256*256; 256*256*256]);;
 
 (* start of main functions *)
 
@@ -81,14 +81,14 @@ let input_bmp_file_hdr ci =
     ('B', 'M') -> { file_type = (buffer.[0], buffer.[1])
                   ; bmp_filesize = int_of_char4 buffer 2
                   ; offset = int_of_char4 buffer 10 }
-  | (m0, m1) -> raise (BitmapFormatNotSupported (m0, m1))
+  | (m0, m1) -> raise (BitmapFormatNotSupported (m0, m1));;
 
 let input_bmp_info_hdr ci =
   let buffer = String.create 12 in
   really_input ci buffer 0 12;
   { bmp_info_hdrsize = int_of_char4 buffer 0
   ; width = int_of_char4 buffer 4
-  ; height = int_of_char4 buffer 8; }
+  ; height = int_of_char4 buffer 8; };;
 
 let input_bmp ci =
   let bf_hdr = input_bmp_file_hdr ci in
@@ -102,4 +102,4 @@ let input_bmp ci =
       let g = input_char ci in
       let r = input_char ci in
       arr.(x) <- (r, g, b)));
-  { info = bi_hdr; bits = bits }
+  { info = bi_hdr; bits = bits };;
