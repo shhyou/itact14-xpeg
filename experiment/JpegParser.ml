@@ -59,27 +59,34 @@ let jpeg_parse_dqt raw_data dqt_idx =
     else List.map (fun i -> parse_table (dqt_idx+2 + i*65)) (range 0 (65/size));;
 
 (* print_binary *)
-let rec print_binary = function
+let rec print_binary len n = match len with
     0 -> ()
-  | n -> print_binary (n / 2); print_char (if n mod 2 == 1 then '1' else '0');;
+  | len -> print_binary (len-1) (n/2);
+           print_char (if n mod 2 == 1 then '1' else '0');;
 
 (* parse DHT table to *)
 let jpeg_parse_dht raw_data dht_idx =
   let size = u16_of_char raw_data dht_idx - 2 - 1 - 16 in
   let (table_type, table_id) = u4_of_char raw_data (dht_idx+2) in
   let tree_sizes = flip List.map (range 0 16) (fun i ->
-                   int_of_char raw_data.[dht_idx+3 + i]) in
-  let node_cnt = sum tree_sizes in
-  let actions =
+                   int_of_char raw_data.[dht_idx+3 + i])
+                |> List.filter (fun len -> len <> 0) in
+  let acts =
     List.concat
-    (flip List.map tree_sizes (fun len ->
-    (fun n -> n lsl 1)::List.map (fun _ n -> n + 1) (range 0 (len-1)))) in
-  let tbl = Array.make 32768 0 in
-     range 0 node_cnt
-  |> List.map2 (fun act i -> (act, int_of_char raw_data.[dht_idx+19 + i])) actions
-  |> flip List.fold_left 0 (fun code (act, data) ->
-                              tbl.(act code) <- data;
-                              act code);
+    (flip List.mapi tree_sizes (fun depth len ->
+    (depth+2, fun n -> (n+1) lsl 1)::List.map (fun _ -> (depth+2, fun n -> n+1))
+                                              (range 0 (len-1)))) in
+  let tbl = Array.make 32768 (0, 0) in
+  let set_code prev_code (depth, act, data) =
+    let code = act prev_code in
+    for i = 0 to (1 lsl (15-depth) - 1)do
+      tbl.(code lsl (15-depth) + i) <- (depth, data)
+    done;
+    code
+  in range 0 size
+  |> List.map2 (fun (depth, act) i ->
+     (depth, act, int_of_char raw_data.[dht_idx+19 + i])) acts
+  |> List.fold_left set_code (-1);
   (table_type, table_id, tbl);;
 
 (* TODOs *)
