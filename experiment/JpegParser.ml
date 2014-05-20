@@ -89,6 +89,31 @@ let jpeg_parse_dht raw_data dht_idx =
   |> List.fold_left set_code (-1);
   (table_type, table_id, tbl);;
 
+type jpeg_sof_comp = {
+    sof_comp_id : int;
+    sof_hi : int;
+    sof_vi : int;
+    sof_tq : int;
+};;
+
+type jpeg_sof = {
+  sof_height : int;
+  sof_width : int;
+  sof_comps : jpeg_sof_comp list
+};;
+
+let jpeg_parse_sof raw_data sof_idx =
+  let nf = int_of_char raw_data.[sof_idx+7] in
+  let [height; width] = List.map (u16_of_char raw_data) [sof_idx+3; sof_idx+5] in
+     flip List.map (range 0 nf) (fun idx ->
+     let pos = sof_idx+8 + idx*3 in
+     let (hi, vi) = u4_of_char raw_data (pos+1) in
+     { sof_comp_id = int_of_char raw_data.[pos]
+     ; sof_hi = hi; sof_vi = vi
+     ; sof_tq = int_of_char raw_data.[pos+2] land 0xf} )
+  |> fun comps -> { sof_height = height
+                  ; sof_width = width
+                  ; sof_comps = comps };;
+
 (* TODOs *)
-let jpeg_parse_sof raw_data sof_idx = ();;
 let jpeg_parse_sos raw_data sof_idx = ();;
