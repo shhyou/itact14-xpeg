@@ -2,6 +2,8 @@ module L = List;;
 
 let flip f x y = f y x;;
 
+let sum xs = List.fold_left (+) 0 xs;;
+
 let rec range begin_ end_ = if begin_ < end_
                               then begin_ :: range (begin_ + 1) end_
                               else [];;
