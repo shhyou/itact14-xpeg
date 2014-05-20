@@ -40,6 +40,7 @@ let zigzag_order () =
     (List.map (fun i -> (y0-i, x0+i)) (range 0 (min y0 (7-x0) + 1))) in
   List.map2 skew_diag (range 0 8@[7;7;7;7;7;7;7]) ([0;0;0;0;0;0;0]@range 0 8);;
 
+(* parse one 16-bit bigendian number *)
 let u16_of_char raw_data idx =
   int_of_char raw_data.[idx] * 256 + int_of_char raw_data.[idx+1];;
 
@@ -47,7 +48,7 @@ let u4_of_char raw_data idx =
   let n = int_of_char raw_data.[idx] in
   (n / 16, n mod 16);;
 
-(* TODOs *)
+(* parse DQT table to list of (table_index, raw_data_position) *)
 let jpeg_parse_dqt raw_data dqt_idx =
   let size = u16_of_char raw_data dqt_idx - 2 in
   let parse_table idx =
@@ -57,6 +58,7 @@ let jpeg_parse_dqt raw_data dqt_idx =
     then raise (Jpeg_format_error "DQT table size is not a multiple of 65")
     else List.map (fun i -> parse_table (dqt_idx+2 + i*65)) (range 0 (65/size));;
 
+(* TODOs *)
 let jpeg_parse_dht raw_data dht_idx =
   let size = u16_of_char raw_data dht_idx - 2 in
   ();;
