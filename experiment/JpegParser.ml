@@ -1,3 +1,4 @@
+open Printf;;
 open Prelude;;
 
 (* utilities *)
@@ -21,7 +22,7 @@ let u4_of_char raw_data idx =
 module L = List;;
 
 let jpeg_raw =
-  let fin = open_in_bin "hd.jpg" in
+  let fin = open_in_bin "rgb.jpg" in
   let len = in_channel_length fin in
   let data = String.create len in
   really_input fin data 0 len;
@@ -64,7 +65,7 @@ let jpeg_parse_dqt raw_data dqt_idx =
 type jpeg_dht = {
   dht_type: int;              (* DC = 0, AC = 1 *)
   dht_id: int;                (* DHT table id *)
-  dht_tbl: (int * int) array  (* (length, data) pairs, index: 15 bit long *)
+  dht_tbl: (int * int) array  (* (length, data) pairs, index: 16 bit long *)
 };;
 
 (* parse DHT table to *)
@@ -72,18 +73,21 @@ let jpeg_parse_dht raw_data dht_idx =
   let size = u16_of_char raw_data dht_idx - 2 - 1 - 16 in
   let (table_type, table_id) = u4_of_char raw_data (dht_idx+2) in
   let tree_sizes = flip L.map (range 0 16) (fun i ->
-                   int_of_char raw_data.[dht_idx+3 + i])
-                |> L.filter (fun len -> len <> 0) in
+                   int_of_char raw_data.[dht_idx+3 + i]) in
   let acts =
-    L.concat
-    (flip L.mapi tree_sizes (fun depth len ->
-    (depth+2, fun n -> (n+1) lsl 1)::L.map (fun _ -> (depth+2, fun n -> n+1))
-                                              (range 0 (len-1)))) in
-  let tbl = Array.make 32768 (0, 0) in
+    let rec create_actions = function
+      | (_, shift, []) -> []
+      | (depth, shift, 0::lens) -> create_actions (depth+1, shift+1, lens)
+      | (depth, shift, len::lens) ->
+        let sll = (depth, fun n -> (n+1) lsl shift) in
+        let inc = range 0 (len-1) |> L.map (fun _ -> (depth, fun n -> n+1)) in
+          sll::(inc@create_actions (depth+1, 1, lens)) in
+    create_actions (1, 1, tree_sizes) in
+  let tbl = Array.make 65536 (0, 0) in
   let set_code prev_code (depth, act, data) =
     let code = act prev_code in
-    for i = 0 to (1 lsl (15-depth) - 1)do
-      tbl.(code lsl (15-depth) + i) <- (depth, data)
+    for i = 0 to (1 lsl (16-depth) - 1) do
+      tbl.(code lsl (16-depth) + i) <- (depth, data)
     done;
     code
   in range 0 size
@@ -167,15 +171,8 @@ let parse_jpeg raw_data =
   let [sos] = seg_filter 0xda jpeg_parse_sos in
   { dqts = dqts; dhts = dhts; sof = sof; sos = sos };;
 
-let decode_huffman raw_data start_idx len_ tbl = ();;
-
 let zigzag_order () =
   let skew_diag y0 x0 =
     (if (y0+x0) mod 2 == 0 then (fun x -> x) else L.rev)
     (L.map (fun i -> (y0-i, x0+i)) (range 0 (min y0 (7-x0) + 1))) in
   L.map2 skew_diag (range 0 8@[7;7;7;7;7;7;7]) ([0;0;0;0;0;0;0]@range 0 8);;
-
-let () =
-  let fout = open_out_bin "mcus.jpg" in
-  let jpeg = parse_jpeg (jpeg_raw ()) in
-  ();;
