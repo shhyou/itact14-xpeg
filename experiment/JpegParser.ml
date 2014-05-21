@@ -1,5 +1,21 @@
 open Prelude;;
 
+(* utilities *)
+
+(* print_binary *)
+let rec print_binary len n = match len with
+    0 -> ()
+  | len -> print_binary (len-1) (n/2);
+           print_char (if n mod 2 == 1 then '1' else '0');;
+
+(* parse one 16-bit bigendian number *)
+let u16_of_char raw_data idx =
+  int_of_char raw_data.[idx] * 256 + int_of_char raw_data.[idx+1];;
+
+let u4_of_char raw_data idx =
+  let n = int_of_char raw_data.[idx] in
+  (n / 16, n mod 16);;
+
 (* jpeg parse *)
 
 module L = List;;
@@ -30,20 +46,6 @@ let jpeg_segmenting raw_data =
       (0xd8, 2)::rest -> rest
     | _ -> raise (Jpeg_format_error "SOI (0xff 0xd8) not found");;
 
-let zigzag_order () =
-  let skew_diag y0 x0 =
-    (if (y0+x0) mod 2 == 0 then (fun x -> x) else L.rev)
-    (L.map (fun i -> (y0-i, x0+i)) (range 0 (min y0 (7-x0) + 1))) in
-  L.map2 skew_diag (range 0 8@[7;7;7;7;7;7;7]) ([0;0;0;0;0;0;0]@range 0 8);;
-
-(* parse one 16-bit bigendian number *)
-let u16_of_char raw_data idx =
-  int_of_char raw_data.[idx] * 256 + int_of_char raw_data.[idx+1];;
-
-let u4_of_char raw_data idx =
-  let n = int_of_char raw_data.[idx] in
-  (n / 16, n mod 16);;
-
 type jpeg_dqt = {
   dqt_id: int;  (* DQT table id *)
   dqt_idx: int  (* DQT start index *)
@@ -58,12 +60,6 @@ let jpeg_parse_dqt raw_data dqt_idx =
   if 65 mod size <> 0
     then raise (Jpeg_format_error "DQT table size is not a multiple of 65")
     else L.map (fun i -> parse_table (dqt_idx+2 + i*65)) (range 0 (65/size));;
-
-(* print_binary *)
-let rec print_binary len n = match len with
-    0 -> ()
-  | len -> print_binary (len-1) (n/2);
-           print_char (if n mod 2 == 1 then '1' else '0');;
 
 type jpeg_dht = {
   dht_type: int;              (* DC = 0, AC = 1 *)
@@ -156,7 +152,7 @@ type jpeg = {
   dqts: jpeg_dqt list;
   dhts: jpeg_dht list;
   sof: jpeg_sof;
-  soss: jpeg_sos list;
+  sos: jpeg_sos;
 };;
 
 let parse_jpeg raw_data =
@@ -168,5 +164,18 @@ let parse_jpeg raw_data =
   let dqts = L.concat (seg_filter 0xdb jpeg_parse_dqt) in
   let dhts = seg_filter 0xc4 jpeg_parse_dht in
   let [sof] = seg_filter 0xc0 jpeg_parse_sof in
-  let soss = seg_filter 0xda jpeg_parse_sos in
-  { dqts = dqts; dhts = dhts; sof = sof; soss = soss };;
+  let [sos] = seg_filter 0xda jpeg_parse_sos in
+  { dqts = dqts; dhts = dhts; sof = sof; sos = sos };;
+
+let decode_huffman raw_data start_idx len_ tbl = ();;
+
+let zigzag_order () =
+  let skew_diag y0 x0 =
+    (if (y0+x0) mod 2 == 0 then (fun x -> x) else L.rev)
+    (L.map (fun i -> (y0-i, x0+i)) (range 0 (min y0 (7-x0) + 1))) in
+  L.map2 skew_diag (range 0 8@[7;7;7;7;7;7;7]) ([0;0;0;0;0;0;0]@range 0 8);;
+
+let () =
+  let fout = open_out_bin "mcus.jpg" in
+  let jpeg = parse_jpeg (jpeg_raw ()) in
+  ();;
