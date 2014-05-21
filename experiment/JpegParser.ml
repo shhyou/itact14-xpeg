@@ -134,5 +134,24 @@ let jpeg_parse_sof raw_data sof_idx =
                 { comp with sof_comp_height = height * comp.sof_hi / hmax
                           ; sof_comp_width = width * comp.sof_vi / vmax }) };;
 
-(* TODOs *)
-let jpeg_parse_sos raw_data sof_idx = ();;
+type jpeg_sos_comp = {
+  sos_comp_sel: int;
+  sos_dc_sel: int;
+  sos_ac_sel: int;
+};;
+
+type jpeg_sos = {
+  sos_comps: jpeg_sos_comp list;
+  sos_data: int (* index to the scan data *)
+};;
+
+let jpeg_parse_sos raw_data sof_idx =
+  let size = u16_of_char raw_data sof_idx in
+  let ns = int_of_char raw_data.[sof_idx+2] in
+  let comps =
+    flip List.map (range 0 ns) (fun idx ->
+    let (tdj, taj) = u4_of_char raw_data (sof_idx+3 + idx*2 + 1) in
+    { sos_comp_sel = int_of_char raw_data.[sof_idx+3 + idx*2]
+    ; sos_dc_sel = tdj
+    ; sos_ac_sel = taj }) in
+  { sos_comps = comps; sos_data = sof_idx + size };;
