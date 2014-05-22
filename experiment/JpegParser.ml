@@ -171,7 +171,7 @@ let parse_jpeg raw_data =
   let [sos] = seg_filter 0xda jpeg_parse_sos in
   { dqts = dqts; dhts = dhts; sof = sof; sos = sos };;
 
-let extract_mcu raw_data start_idx dc_tbl ac_tbl =
+let extract_8x8 raw_data dc_tbl ac_tbl start_idx =
   let u16_of_bits idx =
     let (arr_idx, bit_idx) = (idx lsr 3, idx land 0x7) in
     (int_of_char raw_data.[arr_idx]  lsl 16 +
@@ -181,10 +181,22 @@ let extract_mcu raw_data start_idx dc_tbl ac_tbl =
     | 0 -> 0
     | len -> let msk = lnot (bits asr 30) in
              ((1 lsl len) lxor msk) + (2 land msk) + (bits asr (31-len)) in
-  printf "bits : %08x\n" (u16_of_bits start_idx);
+(*  printf "bits : %08x\n" (u16_of_bits start_idx); *)
   let (dc_hufflen, dc_huff) = dc_tbl.(u16_of_bits start_idx lsr 15) in
-  let dc = get_signed_int (start_idx + dc_hufflen) dc_huff in
-  printf "%d\n" dc;;
+(*  printf "dc_hufflen = %d, dc_huff = %d\n" dc_hufflen dc_huff; *)
+  let buf = Array.make 64 0 in
+  buf.(0) <- get_signed_int (u16_of_bits (start_idx+dc_hufflen)) dc_huff; (* note: add prev_dc here *)
+  printf "dc: %d\n" buf.(0);
+  let rec extract_ac idx = function
+    | 64 -> idx
+    | n -> match ac_tbl.(u16_of_bits idx lsr 15) with
+              (ac_hufflen, 0) -> idx + ac_hufflen
+            | (ac_hufflen, ac_huff) ->
+              let (rrrr, ssss) = (ac_huff lsr 4, ac_huff land 0xf) in
+              buf.(n+rrrr) <- get_signed_int (u16_of_bits (idx+ac_hufflen)) ssss;
+              printf "    ac: %d -> %d\n" (n+rrrr) buf.(n+rrrr);
+              extract_ac (idx+ac_hufflen+ssss) (n+rrrr+1) in
+  (extract_ac (start_idx+dc_hufflen+dc_huff) 1, buf);;
 
 let test () =
   let raw_data = jpeg_raw () in
@@ -198,7 +210,7 @@ let test () =
   let { sos_dc_sel = dc_sel; sos_ac_sel = ac_sel } = L.hd jpg.sos.sos_comps in
   printf "dc_sel = %d, ac_sel = %d\n" dc_sel ac_sel;
   let (dc_tbl, ac_tbl) = (dht_select 0 dc_sel, dht_select 1 ac_sel) in
-  extract_mcu raw_data (jpg.sos.sos_data*8) dc_tbl ac_tbl;;
+  extract_8x8 raw_data dc_tbl ac_tbl (jpg.sos.sos_data*8);;
 
 let zigzag_order () =
   let skew_diag y0 x0 =
