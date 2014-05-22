@@ -171,7 +171,7 @@ let parse_jpeg raw_data =
   let [sos] = seg_filter 0xda jpeg_parse_sos in
   { dqts = dqts; dhts = dhts; sof = sof; sos = sos };;
 
-let extract_8x8 raw_data dc_tbl ac_tbl start_idx =
+let extract_8x8 raw_data dc_tbl ac_tbl start_idx prev_dc buf =
   let u16_of_bits idx =
     let (arr_idx, bit_idx) = (idx lsr 3, idx land 0x7) in
     (int_of_char raw_data.[arr_idx]  lsl 16 +
@@ -184,8 +184,7 @@ let extract_8x8 raw_data dc_tbl ac_tbl start_idx =
 (*  printf "bits : %08x\n" (u16_of_bits start_idx); *)
   let (dc_hufflen, dc_huff) = dc_tbl.(u16_of_bits start_idx lsr 15) in
 (*  printf "dc_hufflen = %d, dc_huff = %d\n" dc_hufflen dc_huff; *)
-  let buf = Array.make 64 0 in
-  buf.(0) <- get_signed_int (u16_of_bits (start_idx+dc_hufflen)) dc_huff; (* note: add prev_dc here *)
+  buf.(0) <- prev_dc + get_signed_int (u16_of_bits (start_idx+dc_hufflen)) dc_huff;
   printf "dc: %d\n" buf.(0);
   let rec extract_ac idx = function
     | 64 -> idx
@@ -196,21 +195,52 @@ let extract_8x8 raw_data dc_tbl ac_tbl start_idx =
               buf.(n+rrrr) <- get_signed_int (u16_of_bits (idx+ac_hufflen)) ssss;
               printf "    ac: %d -> %d\n" (n+rrrr) buf.(n+rrrr);
               extract_ac (idx+ac_hufflen+ssss) (n+rrrr+1) in
-  (extract_ac (start_idx+dc_hufflen+dc_huff) 1, buf);;
+  extract_ac (start_idx+dc_hufflen+dc_huff) 1;;
 
-let test () =
-  let raw_data = jpeg_raw () in
-  printf "reading...\n";
-  let jpg = parse_jpeg raw_data in
+let extract_mcu scan jpg start_idx =
+  let comp_cnts = L.map (fun c -> c.sof_hi*c.sof_vi) jpg.sof.sof_comps in
+  let bufs = Array.of_list (L.map (fun cnt -> Array.make_matrix cnt 64 0) comp_cnts) in
   let dht_select dht_type dht_id  =
     let predicate tbl = tbl.dht_type == dht_type && tbl.dht_id == dht_id in
     match L.filter predicate jpg.dhts with
       [x] -> x.dht_tbl
     | _ -> raise (Failure "Unknown Huffman (type, id)") in
-  let { sos_dc_sel = dc_sel; sos_ac_sel = ac_sel } = L.hd jpg.sos.sos_comps in
-  printf "dc_sel = %d, ac_sel = %d\n" dc_sel ac_sel;
-  let (dc_tbl, ac_tbl) = (dht_select 0 dc_sel, dht_select 1 ac_sel) in
-  extract_8x8 raw_data dc_tbl ac_tbl (jpg.sos.sos_data*8);;
+  let (_, next_idx) =
+     L.combine comp_cnts jpg.sos.sos_comps
+  |> L.fold_left (fun (m, prev_idx) (comp_cnt, sos_comp) ->
+       let { sos_dc_sel = dc_sel; sos_ac_sel = ac_sel } = sos_comp in
+       printf "dc_sel = %d, ac_sel = %d\n" dc_sel ac_sel;
+       let (dc_tbl, ac_tbl) = (dht_select 0 dc_sel, dht_select 1 ac_sel) in
+       let rec extract_loop n prev_dc idx =
+(*         printf "extract %d: idx=%d\n" n idx; *)
+         if n == comp_cnt
+           then idx
+           else extract_8x8 scan dc_tbl ac_tbl idx prev_dc bufs.(m).(n)
+             |> extract_loop (n+1) bufs.(m).(n).(0) in
+       (m+1, extract_loop 0 0 prev_idx)) (0, start_idx)
+  in (next_idx, bufs)
+
+let extract_scan raw_data start_idx =
+  let rec count_length acc idx = match (raw_data.[idx], raw_data.[idx+1]) with
+      ('\xff', '\x00') -> count_length (acc+1) (idx+2)
+    | ('\xff', _) -> (acc, idx)
+    | _ -> count_length (acc+1) (idx+1) in
+  let (next_idx, len) = count_length 0 start_idx in
+  let buf = String.make (len+2) '\x00' in
+  let rec blit in_idx out_idx = match (raw_data.[in_idx], raw_data.[in_idx+1]) with
+      ('\xff', '\x00') -> buf.[out_idx] <- '\xff'; blit (in_idx+2) (out_idx+1)
+    | ('\xff', _) -> ()
+    | (d, _) -> buf.[out_idx] <- d; blit (in_idx+1) (out_idx+1) in
+  blit start_idx 0;
+  (next_idx, buf)
+
+(* TODO: parse jpeg using a loop (sequentially); remove jpeg_segmenting *)
+let test () =
+  let raw_data = jpeg_raw () in
+  printf "reading...\n";
+  let jpg = parse_jpeg raw_data in
+  let (next_idx, scan) = extract_scan raw_data jpg.sos.sos_data in
+  extract_mcu scan jpg 0;;
 
 let zigzag_order () =
   let skew_diag y0 x0 =
