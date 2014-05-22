@@ -171,21 +171,22 @@ let parse_jpeg raw_data =
   let [sos] = seg_filter 0xda jpeg_parse_sos in
   { dqts = dqts; dhts = dhts; sof = sof; sos = sos };;
 
+let extract_mcu raw_data start_idx dc_tbl ac_tbl =
+  let u16_of_bits idx =
+    let (arr_idx, bit_idx) = (idx lsr 3, idx land 0x7) in
+    (int_of_char raw_data.[arr_idx]  lsl 16 +
+     int_of_char raw_data.[arr_idx+1] lsl 8 +
+     int_of_char raw_data.[arr_idx+2]) lsl (7 + bit_idx) in
+  let get_signed_int bits = function
+    | 0 -> 0
+    | len -> let msk = lnot (bits asr 30) in
+             ((1 lsl len) lxor msk) + (2 land msk) + (bits asr (31-len)) in
+  printf "bits : %08x\n" (u16_of_bits start_idx);
+  let (dc_hufflen, dc_huff) = dc_tbl.(u16_of_bits start_idx lsr 15) in
+  let dc = get_signed_int (start_idx + dc_hufflen) dc_huff in
+  printf "%d\n" dc;;
+
 let test () =
-  let extract_mcu raw_data start_idx dc_tbl ac_tbl =
-    let u16_of_bits idx =
-      let (arr_idx, bit_idx) = (idx lsr 3, idx land 0x7) in
-      (int_of_char raw_data.[arr_idx]  lsl 16 +
-       int_of_char raw_data.[arr_idx+1] lsl 8 +
-       int_of_char raw_data.[arr_idx+2]) lsl (7 + bit_idx) in
-    let get_signed_int bits = function
-      | 0 -> 0
-      | len -> let msk = lnot (bits asr 30) in
-               ((1 lsl len) lxor msk) + (2 land msk) + (bits asr (31-len)) in
-    printf "bits : %08x\n" (u16_of_bits start_idx);
-    let (dc_hufflen, dc_huff) = dc_tbl.(u16_of_bits start_idx lsr 15) in
-    let dc = get_signed_int (start_idx + dc_hufflen) dc_huff in
-    printf "%d\n" dc in
   let raw_data = jpeg_raw () in
   printf "reading...\n";
   let jpg = parse_jpeg raw_data in
