@@ -171,6 +171,34 @@ let parse_jpeg raw_data =
   let [sos] = seg_filter 0xda jpeg_parse_sos in
   { dqts = dqts; dhts = dhts; sof = sof; sos = sos };;
 
+let test () =
+  let extract_mcu raw_data start_idx dc_tbl ac_tbl =
+    let u16_of_bits idx =
+      let (arr_idx, bit_idx) = (idx lsr 3, idx land 0x7) in
+      (int_of_char raw_data.[arr_idx]  lsl 16 +
+       int_of_char raw_data.[arr_idx+1] lsl 8 +
+       int_of_char raw_data.[arr_idx+2]) lsl (7 + bit_idx) in
+    let get_signed_int bits = function
+      | 0 -> 0
+      | len -> let msk = lnot (bits asr 30) in
+               ((1 lsl len) lxor msk) + (2 land msk) + (bits asr (31-len)) in
+    printf "bits : %08x\n" (u16_of_bits start_idx);
+    let (dc_hufflen, dc_huff) = dc_tbl.(u16_of_bits start_idx lsr 15) in
+    let dc = get_signed_int (start_idx + dc_hufflen) dc_huff in
+    printf "%d\n" dc in
+  let raw_data = jpeg_raw () in
+  printf "reading...\n";
+  let jpg = parse_jpeg raw_data in
+  let dht_select dht_type dht_id  =
+    let predicate tbl = tbl.dht_type == dht_type && tbl.dht_id == dht_id in
+    match L.filter predicate jpg.dhts with
+      [x] -> x.dht_tbl
+    | _ -> raise (Failure "Unknown Huffman (type, id)") in
+  let { sos_dc_sel = dc_sel; sos_ac_sel = ac_sel } = L.hd jpg.sos.sos_comps in
+  printf "dc_sel = %d, ac_sel = %d\n" dc_sel ac_sel;
+  let (dc_tbl, ac_tbl) = (dht_select 0 dc_sel, dht_select 1 ac_sel) in
+  extract_mcu raw_data (jpg.sos.sos_data*8) dc_tbl ac_tbl;;
+
 let zigzag_order () =
   let skew_diag y0 x0 =
     (if (y0+x0) mod 2 == 0 then (fun x -> x) else L.rev)
