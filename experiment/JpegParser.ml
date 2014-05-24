@@ -171,6 +171,20 @@ let parse_jpeg raw_data =
   let [sos] = seg_filter 0xda jpeg_parse_sos in
   { dqts = dqts; dhts = dhts; sof = sof; sos = sos };;
 
+let extract_scan raw_data start_idx =
+  let rec count_length acc idx = match (raw_data.[idx], raw_data.[idx+1]) with
+      ('\xff', '\x00') -> count_length (acc+1) (idx+2)
+    | ('\xff', _) -> (acc, idx)
+    | _ -> count_length (acc+1) (idx+1) in
+  let (next_idx, len) = count_length 0 start_idx in
+  let buf = String.make (len+2) '\x00' in
+  let rec blit in_idx out_idx = match (raw_data.[in_idx], raw_data.[in_idx+1]) with
+      ('\xff', '\x00') -> buf.[out_idx] <- '\xff'; blit (in_idx+2) (out_idx+1)
+    | ('\xff', _) -> ()
+    | (d, _) -> buf.[out_idx] <- d; blit (in_idx+1) (out_idx+1) in
+  blit start_idx 0;
+  (next_idx, buf)
+
 let extract_8x8 raw_data dc_tbl ac_tbl start_idx prev_dc buf =
   let u16_of_bits idx =
     let (arr_idx, bit_idx) = (idx lsr 3, idx land 0x7) in
@@ -219,20 +233,6 @@ let extract_mcu scan jpg start_idx =
              |> extract_loop (n+1) bufs.(m).(n).(0) in
        (m+1, extract_loop 0 0 prev_idx)) (0, start_idx)
   in (next_idx, bufs)
-
-let extract_scan raw_data start_idx =
-  let rec count_length acc idx = match (raw_data.[idx], raw_data.[idx+1]) with
-      ('\xff', '\x00') -> count_length (acc+1) (idx+2)
-    | ('\xff', _) -> (acc, idx)
-    | _ -> count_length (acc+1) (idx+1) in
-  let (next_idx, len) = count_length 0 start_idx in
-  let buf = String.make (len+2) '\x00' in
-  let rec blit in_idx out_idx = match (raw_data.[in_idx], raw_data.[in_idx+1]) with
-      ('\xff', '\x00') -> buf.[out_idx] <- '\xff'; blit (in_idx+2) (out_idx+1)
-    | ('\xff', _) -> ()
-    | (d, _) -> buf.[out_idx] <- d; blit (in_idx+1) (out_idx+1) in
-  blit start_idx 0;
-  (next_idx, buf)
 
 (* TODO: parse jpeg using a loop (sequentially); remove jpeg_segmenting *)
 let test () =
