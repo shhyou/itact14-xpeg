@@ -19,9 +19,6 @@ let u4_of_char raw_data idx =
 
 (* jpeg parse *)
 
-module L = List;;
-module A = Array;;
-
 let jpeg_raw =
   let fin = open_in_bin "rgb.jpg" in
   let len = in_channel_length fin in
@@ -61,7 +58,7 @@ let jpeg_parse_dqt raw_data dqt_idx =
     { dqt_id = table_id; dqt_idx = idx+1 } in
   if 65 mod size <> 0
     then raise (Jpeg_format_error "DQT table size is not a multiple of 65")
-    else L.map (fun i -> parse_table (dqt_idx+2 + i*65)) (range 0 (65/size));;
+    else L.map (fun i -> parse_table (dqt_idx+2 + i*65)) (L.range 0 (65/size));;
 
 type jpeg_dht = {
   dht_type: int;              (* DC = 0, AC = 1 *)
@@ -73,7 +70,7 @@ type jpeg_dht = {
 let jpeg_parse_dht raw_data dht_idx =
   let size = u16_of_char raw_data dht_idx - 2 - 1 - 16 in
   let (table_type, table_id) = u4_of_char raw_data (dht_idx+2) in
-  let tree_sizes = flip L.map (range 0 16) (fun i ->
+  let tree_sizes = flip L.map (L.range 0 16) (fun i ->
                    int_of_char raw_data.[dht_idx+3 + i]) in
   let acts =
     let rec create_actions = function
@@ -81,7 +78,7 @@ let jpeg_parse_dht raw_data dht_idx =
       | (depth, shift, 0::lens) -> create_actions (depth+1, shift+1, lens)
       | (depth, shift, len::lens) ->
         let sll = (depth, fun n -> (n+1) lsl shift) in
-        let inc = range 0 (len-1) |> L.map (fun _ -> (depth, fun n -> n+1)) in
+        let inc = L.range 0 (len-1) |> L.map (fun _ -> (depth, fun n -> n+1)) in
           sll::(inc@create_actions (depth+1, 1, lens)) in
     create_actions (1, 1, tree_sizes) in
   let tbl = A.make 65536 (0, 0) in
@@ -91,7 +88,7 @@ let jpeg_parse_dht raw_data dht_idx =
       tbl.(code lsl (16-depth) + i) <- (depth, data)
     done;
     code
-  in range 0 size
+  in L.range 0 size
   |> L.map2 (fun (depth, act) i ->
      (depth, act, int_of_char raw_data.[dht_idx+19 + i])) acts
   |> L.fold_left set_code (-1);
@@ -114,7 +111,7 @@ let jpeg_parse_sof raw_data sof_idx =
   let nf = int_of_char raw_data.[sof_idx+7] in
   let [height; width] = L.map (u16_of_char raw_data) [sof_idx+3; sof_idx+5] in
   let comps =
-     flip L.map (range 0 nf) (fun idx ->
+     flip L.map (L.range 0 nf) (fun idx ->
      let pos = sof_idx+8 + idx*3 in
      let (hi, vi) = u4_of_char raw_data (pos+1) in
      { sof_comp_id = int_of_char raw_data.[pos]
@@ -139,7 +136,7 @@ let jpeg_parse_sos raw_data sof_idx =
   let size = u16_of_char raw_data sof_idx in
   let ns = int_of_char raw_data.[sof_idx+2] in
   let comps =
-    flip L.map (range 0 ns) (fun idx ->
+    flip L.map (L.range 0 ns) (fun idx ->
     let (tdj, taj) = u4_of_char raw_data (sof_idx+3 + idx*2 + 1) in
     { sos_comp_sel = int_of_char raw_data.[sof_idx+3 + idx*2]
     ; sos_dc_sel = tdj
@@ -239,10 +236,10 @@ let extract_mcus scan jpg start_idx =
                        , dht_sel 1 c.sos_ac_sel)) jpg.sos.sos_comps in
   let comp_sizes = L.map (fun c -> c.sof_hi*c.sof_vi) jpg.sof.sof_comps in
   let comp_tbls = A.of_list (L.map2 (fun a b -> (a, b)) comp_sizes huff_tbls) in
-  let comp_size = sum comp_sizes in
+  let comp_size = L.sum comp_sizes in
   let mcu_cnt =
-    let hmax = L.map (fun c -> c.sof_hi) jpg.sof.sof_comps |> maximum in
-    let vmax = L.map (fun c -> c.sof_vi) jpg.sof.sof_comps |> maximum in
+    let hmax = L.map (fun c -> c.sof_hi) jpg.sof.sof_comps |> L.maximum in
+    let vmax = L.map (fun c -> c.sof_vi) jpg.sof.sof_comps |> L.maximum in
     let hcomps = (jpg.sof.sof_height + 8*hmax - 1)/(8*hmax) in
     let vcomps = (jpg.sof.sof_width  + 8*vmax - 1)/(8*vmax) in
     printf "hcomps=%d,vcomps=%d\n" hcomps vcomps;
@@ -282,5 +279,5 @@ let test () =
 let zigzag_order () =
   let skew_diag y0 x0 =
     (if (y0+x0) mod 2 == 0 then (fun x -> x) else L.rev)
-    (L.map (fun i -> (y0-i, x0+i)) (range 0 (min y0 (7-x0) + 1))) in
-  L.map2 skew_diag (range 0 8@[7;7;7;7;7;7;7]) ([0;0;0;0;0;0;0]@range 0 8);;
+    (L.map (fun i -> (y0-i, x0+i)) (L.range 0 (min y0 (7-x0) + 1))) in
+  L.map2 skew_diag (L.range 0 8@[7;7;7;7;7;7;7]) ([0;0;0;0;0;0;0]@L.range 0 8);;

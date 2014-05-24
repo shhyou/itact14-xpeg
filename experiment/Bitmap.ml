@@ -10,9 +10,6 @@ type bmp = { info: bmp_info_hdr
 
 exception BitmapFormatNotSupported of char * char;;
 
-module A = Array;;
-module L = List;;
-
 (* utility functions *)
 
 (*  char4_of_int int -> char list  *)
@@ -22,7 +19,7 @@ let char4_of_int n =
 
 (*  int_of_char4 : string -> int -> int  *)
 let int_of_char4 buffer idx =
-  sum (L.mapi (fun i base -> int_of_char buffer.[idx + i] * base)
+  L.sum (L.mapi (fun i base -> int_of_char buffer.[idx + i] * base)
        [1; 256; 256*256; 256*256*256]);;
 
 (* start of main functions *)
