@@ -47,7 +47,7 @@ let jpeg_segmenting raw_data =
 
 type jpeg_dqt = {
   dqt_id: int;  (* DQT table id *)
-  dqt_idx: int  (* DQT start index *)
+  dqt_tbl: int array (* DQT table *)
 };;
 
 (* parse DQT table to list of (table_index, raw_data_position) *)
@@ -55,7 +55,8 @@ let jpeg_parse_dqt raw_data dqt_idx =
   let size = u16_of_char raw_data dqt_idx - 2 in
   let parse_table idx =
     let (0, table_id) = u4_of_char raw_data idx in
-    { dqt_id = table_id; dqt_idx = idx+1 } in
+    { dqt_id = table_id
+    ; dqt_tbl = A.init 64 (fun i -> int_of_char raw_data.[idx+1 + i]) } in
   if 65 mod size <> 0
     then raise (Jpeg_format_error "DQT table size is not a multiple of 65")
     else L.map (fun i -> parse_table (dqt_idx+2 + i*65)) (L.range 0 (65/size));;
@@ -190,7 +191,7 @@ let extract_8x8 raw_data (dc_tbl, ac_tbl) start_idx buf =
   let (dc_hufflen, dc_huff) = dc_tbl.(u16_of_bits start_idx lsr 15) in
 (*  printf "dc_hufflen = %d, dc_huff = %d\n" dc_hufflen dc_huff; *)
   buf.(0) <- get_signed_int (u16_of_bits (start_idx+dc_hufflen)) dc_huff; (*diff*)
-  printf "dc: %d\n" buf.(0);
+  printf "dc_diff: %d\n" buf.(0);
   let rec extract_ac idx = function
       64 -> idx
     | n -> match ac_tbl.(u16_of_bits idx lsr 15) with
@@ -198,32 +199,9 @@ let extract_8x8 raw_data (dc_tbl, ac_tbl) start_idx buf =
             | (ac_hufflen, ac_huff) ->
               let (rrrr, ssss) = (ac_huff lsr 4, ac_huff land 0xf) in
               buf.(n+rrrr) <- get_signed_int (u16_of_bits (idx+ac_hufflen)) ssss;
-              printf "    ac: %d -> %d\n" (n+rrrr) buf.(n+rrrr);
+(*              printf "    ac: %d -> %d\n" (n+rrrr) buf.(n+rrrr); *)
               extract_ac (idx+ac_hufflen+ssss) (n+rrrr+1) in
   extract_ac (start_idx+dc_hufflen+dc_huff) 1;;
-
-let extract_mcu scan jpg start_idx =
-  let comp_cnts = L.map (fun c -> c.sof_hi*c.sof_vi) jpg.sof.sof_comps in
-  let bufs = A.of_list (L.map (fun cnt -> A.make_matrix cnt 64 0) comp_cnts) in
-  let dht_select dht_type dht_id  =
-    let predicate tbl = tbl.dht_type == dht_type && tbl.dht_id == dht_id in
-    match L.filter predicate jpg.dhts with
-      [x] -> x.dht_tbl
-    | _ -> raise (Failure "Unknown Huffman (type, id)") in
-  let (_, next_idx) =
-     L.combine comp_cnts jpg.sos.sos_comps
-  |> flip L.fold_left (0, start_idx) (fun (m, prev_idx) (comp_cnt, sos_comp) ->
-       let { sos_dc_sel = dc_sel; sos_ac_sel = ac_sel } = sos_comp in
-       printf "dc_sel = %d, ac_sel = %d\n" dc_sel ac_sel;
-       let huff_tbl = (dht_select 0 dc_sel, dht_select 1 ac_sel) in
-       let rec extract_loop n idx =
-(*         printf "extract %d: idx=%d\n" n idx; *)
-         if n == comp_cnt
-           then idx
-           else extract_8x8 scan huff_tbl idx bufs.(m).(n)
-             |> extract_loop (n+1) in
-       (m+1, extract_loop 0 prev_idx))
-  in (next_idx, bufs);;
 
 let extract_mcus scan jpg start_idx =
   let huff_tbls =
@@ -245,29 +223,36 @@ let extract_mcus scan jpg start_idx =
     let vcomps = (jpg.sof.sof_width  + 8*vmax - 1)/(8*vmax) in
     printf "hcomps=%d,vcomps=%d\n" hcomps vcomps;
     hcomps * vcomps in
-  let bufs = A.make_matrix (mcu_cnt*comp_size) 64 0 in
+  let block_cnt = mcu_cnt*comp_size in
+  let bufs = A.make_matrix block_cnt 64 0 in
   printf "comp_size=%d,mcu_cnt=%d\n" comp_size mcu_cnt;
   printf "bufs length=%d\n" (A.length bufs);
   let rec extract_loop block_idx bit_idx =
     let rec extract_mcu (n, bit_idx) (comp_cnt, huff_tbl) =
       if n == comp_cnt
         then (n, bit_idx)
-        else
-         (printf "extract_mcu: %d+%d; comp_cnt: %d\n" block_idx n comp_cnt;
-          let next_idx = extract_8x8 scan huff_tbl bit_idx bufs.(block_idx+n) in
-          extract_mcu (n+1, next_idx) (comp_cnt, huff_tbl)) in
-    printf "extract_loop: %d\n" block_idx;
-    if block_idx == mcu_cnt*comp_size
+        else let next_idx = extract_8x8 scan huff_tbl bit_idx bufs.(block_idx+n) in
+             extract_mcu (n+1, next_idx) (comp_cnt, huff_tbl) in
+(*    printf "extract_loop: %d\n" block_idx; *)
+    if block_idx == block_cnt
       then bit_idx
       else let (_, next_idx) = A.fold_left extract_mcu (0, bit_idx) comp_tbls in
            extract_loop (block_idx+comp_size) next_idx in
-  extract_loop 0 start_idx;;
-  
-
-let rec extract_mcusxxx scan jpg idx acc = function
-    0 -> (idx, L.rev acc)
-  | n -> let (next_idx, mcu) = extract_mcu scan jpg idx in
-         extract_mcusxxx scan jpg next_idx (mcu::acc) (n-1);;
+  let next_idx = extract_loop 0 start_idx in
+  let rec fix_diff_dc block_idx =
+    if block_idx == block_cnt
+      then ()
+      else comp_tbls
+        |> flip A.fold_left block_idx (fun n (comp_cnt, _) ->
+           let rec set_acc prev_dc m =
+             if m < block_idx+comp_cnt then begin
+               bufs.(m).(0) <- bufs.(m).(0) + prev_dc;
+               set_acc bufs.(m).(0) (m+1)
+             end
+           in set_acc 0 n; block_idx+comp_cnt)
+        |> fix_diff_dc in
+  fix_diff_dc 0;
+  (next_idx, bufs);;
 
 (* TODO: parse jpeg using a loop (sequentially); remove jpeg_segmenting *)
 let test () =
@@ -275,7 +260,8 @@ let test () =
   printf "reading...\n";
   let jpg = parse_jpeg raw_data in
   let (next_idx, scan) = extract_scan raw_data jpg.sos.sos_data in
-  extract_mcus scan jpg 0;;
+  let (final_idx, bufs) = extract_mcus scan jpg 0 in
+  (final_idx, bufs);;
 
 let zigzag_order () =
   let skew_diag y0 x0 =
