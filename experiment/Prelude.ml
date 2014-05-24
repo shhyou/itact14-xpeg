@@ -23,6 +23,12 @@ module L = struct
                    let cons a b = a::b in
                    map2 cons xs (row1::submatrix)
 
+  let scan_left f z xs =
+    let rec scan_left_acc z acc = function
+        [] -> rev (z::acc)
+      | x::xs -> let w = f z x in scan_left_acc w (z::acc) xs
+    in scan_left_acc z [] xs
+
 end
 
 module A = Array;;

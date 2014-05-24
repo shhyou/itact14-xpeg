@@ -49,6 +49,7 @@ module L :
     val range : int -> int -> int list
     val maximum : 'a list -> 'a
     val transpose : 'a list list -> 'a list list
+    val scan_left : ('a -> 'b -> 'a) -> 'a -> 'b list -> 'a list
   end
 module A :
   sig

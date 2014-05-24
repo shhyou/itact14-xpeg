@@ -74,7 +74,7 @@ let jpeg_parse_dht raw_data dht_idx =
                    int_of_char raw_data.[dht_idx+3 + i]) in
   let acts =
     let rec create_actions = function
-      | (_, shift, []) -> []
+        (_, shift, []) -> []
       | (depth, shift, 0::lens) -> create_actions (depth+1, shift+1, lens)
       | (depth, shift, len::lens) ->
         let sll = (depth, fun n -> (n+1) lsl shift) in
@@ -183,7 +183,7 @@ let extract_8x8 raw_data (dc_tbl, ac_tbl) start_idx buf =
      int_of_char raw_data.[arr_idx+1] lsl 8 +
      int_of_char raw_data.[arr_idx+2]) lsl (7 + bit_idx) in
   let get_signed_int bits = function
-    | 0 -> 0
+      0 -> 0
     | len -> let msk = lnot (bits asr 30) in
              ((1 lsl len) lxor msk) + (2 land msk) + (bits asr (31-len)) in
 (*  printf "bits : %08x\n" (u16_of_bits start_idx); *)
@@ -192,7 +192,7 @@ let extract_8x8 raw_data (dc_tbl, ac_tbl) start_idx buf =
   buf.(0) <- get_signed_int (u16_of_bits (start_idx+dc_hufflen)) dc_huff; (*diff*)
   printf "dc: %d\n" buf.(0);
   let rec extract_ac idx = function
-    | 64 -> idx
+      64 -> idx
     | n -> match ac_tbl.(u16_of_bits idx lsr 15) with
               (ac_hufflen, 0) -> idx + ac_hufflen
             | (ac_hufflen, ac_huff) ->
@@ -235,7 +235,8 @@ let extract_mcus scan jpg start_idx =
     in L.map (fun c -> ( dht_sel 0 c.sos_dc_sel
                        , dht_sel 1 c.sos_ac_sel)) jpg.sos.sos_comps in
   let comp_sizes = L.map (fun c -> c.sof_hi*c.sof_vi) jpg.sof.sof_comps in
-  let comp_tbls = A.of_list (L.map2 (fun a b -> (a, b)) comp_sizes huff_tbls) in
+  let comp_accs = L.tl (L.scan_left (+) 0 comp_sizes) in
+  let comp_tbls = A.of_list (L.map2 (fun a b -> (a, b)) comp_accs huff_tbls) in
   let comp_size = L.sum comp_sizes in
   let mcu_cnt =
     let hmax = L.map (fun c -> c.sof_hi) jpg.sof.sof_comps |> L.maximum in
@@ -264,7 +265,7 @@ let extract_mcus scan jpg start_idx =
   
 
 let rec extract_mcusxxx scan jpg idx acc = function
-  | 0 -> (idx, L.rev acc)
+    0 -> (idx, L.rev acc)
   | n -> let (next_idx, mcu) = extract_mcu scan jpg idx in
          extract_mcusxxx scan jpg next_idx (mcu::acc) (n-1);;
 
