@@ -296,8 +296,20 @@ let dequantize jpg info bufs =
   in let _ = deq_loop 0
   in ();;
 
-let unzigzag jpg info bufs =
-  ();;
+let zigzag_order () =
+  let skew_diag y0 x0 =
+    (if (y0+x0) mod 2 == 0 then (fun x -> x) else L.rev)
+    (L.map (fun i -> (y0-i, x0+i)) (L.range 0 (min y0 (7-x0) + 1))) in
+     L.map2 skew_diag (L.range 0 8@[7;7;7;7;7;7;7]) ([0;0;0;0;0;0;0]@L.range 0 8)
+  |> L.concat
+  |> A.of_list;;
+
+let unzigzag jpg info bufs_flat =
+  let bufs = A.init info.block_cnt (fun _ -> A.make_matrix 8 8 0) in
+  flip A.iteri bufs_flat (fun block_idx block ->
+    flip A.iteri (zigzag_order ()) (fun idx (y, x) ->
+      bufs.(block_idx).(y).(x) <- block.(idx)));
+  bufs;;
 
 (* TODO: parse jpeg using a loop (sequentially); remove jpeg_segmenting *)
 let test () =
@@ -306,14 +318,7 @@ let test () =
   let jpg = parse_jpeg raw_data in
   let info = get_jpeg_info jpg in
   let (next_idx, scan) = extract_scan raw_data jpg.sos.sos_data in
-  let (final_idx, bufs) = extract_mcus scan jpg info 0 in
-  dequantize jpg info bufs;
+  let (final_idx, bufs_flat) = extract_mcus scan jpg info 0 in
+  dequantize jpg info bufs_flat;
+  let bufs = unzigzag jpg info bufs_flat in
   (final_idx, bufs);;
-
-let zigzag_order () =
-  let skew_diag y0 x0 =
-    (if (y0+x0) mod 2 == 0 then (fun x -> x) else L.rev)
-    (L.map (fun i -> (y0-i, x0+i)) (L.range 0 (min y0 (7-x0) + 1))) in
-
-     L.map2 skew_diag (L.range 0 8@[7;7;7;7;7;7;7]) ([0;0;0;0;0;0;0]@L.range 0 8)
-  |> A.of_list;;
