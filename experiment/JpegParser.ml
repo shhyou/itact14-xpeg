@@ -248,7 +248,7 @@ let get_jpeg_info jpg =
   ; mcu_cnt = mcu_cnt
   ; block_cnt = block_cnt };;
 
-let extract_mcus scan jpg info start_idx =
+let extract_mcus scan info start_idx =
   let bufs = A.make_matrix info.block_cnt 64 0 in
   printf "comp_size=%d,mcu_cnt=%d\n" info.comp_size info.mcu_cnt;
   printf "bufs length=%d\n" (A.length bufs);
@@ -279,7 +279,7 @@ let extract_mcus scan jpg info start_idx =
   fix_diff_dc 0;
   (next_idx, bufs);;
 
-let dequantize jpg info bufs =
+let dequantize info bufs =
   let rec deq_loop block_idx =
     printf "block_idx=%d\n" block_idx;
     if block_idx == info.block_cnt
@@ -304,11 +304,29 @@ let zigzag_order () =
   |> L.concat
   |> A.of_list;;
 
-let unzigzag jpg info bufs_flat =
+let unzigzag info bufs_flat =
   let bufs = A.init info.block_cnt (fun _ -> A.make_matrix 8 8 0) in
   flip A.iteri bufs_flat (fun block_idx block ->
     flip A.iteri (zigzag_order ()) (fun idx (y, x) ->
       bufs.(block_idx).(y).(x) <- block.(idx)));
+  bufs;;
+
+
+let idct info bufs_8x8s =
+  let idct1_vecs =
+    let pi = acos (-1.0) in
+    let normalize_factor = sqrt (2.0 /. 8.0) in
+    let angle n k = cos (pi *. (float_of_int n +. 0.5) *. float_of_int k /. 8.0) in
+    let cos_vecs f = flip L.map (L.range 0 8) (fun k ->
+                       flip L.map (L.range 0 8) (fun n ->
+                         f n k *. normalize_factor)) in
+    let fix_x0_coef (_::xs) = 0.5 *. normalize_factor::xs in
+       L.map fix_x0_coef (cos_vecs (fun n k -> angle k n))
+    |> L.map A.of_list
+    |> A.of_list in
+  let idct2_vecs =
+    A.init 8 (fun i -> A.init 8 (fun j -> raise (Failure "TODO"))) in
+  let bufs = A.make info.block_cnt 0 in
   bufs;;
 
 (* TODO: parse jpeg using a loop (sequentially); remove jpeg_segmenting *)
@@ -318,7 +336,8 @@ let test () =
   let jpg = parse_jpeg raw_data in
   let info = get_jpeg_info jpg in
   let (next_idx, scan) = extract_scan raw_data jpg.sos.sos_data in
-  let (final_idx, bufs_flat) = extract_mcus scan jpg info 0 in
-  dequantize jpg info bufs_flat;
-  let bufs = unzigzag jpg info bufs_flat in
+  let (final_idx, bufs_flat) = extract_mcus scan info 0 in
+  dequantize info bufs_flat;
+  let bufs_8x8s = unzigzag info bufs_flat in
+  let bufs = idct info bufs_8x8s in
   (final_idx, bufs);;
