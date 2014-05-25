@@ -203,7 +203,16 @@ let extract_8x8 raw_data (dc_tbl, ac_tbl) start_idx buf =
               extract_ac (idx+ac_hufflen+ssss) (n+rrrr+1) in
   extract_ac (start_idx+dc_hufflen+dc_huff) 1;;
 
-let extract_mcus scan jpg start_idx =
+type jpeg_info = {
+  comp_sizes : int list;
+  comp_idxs : int list; (* scanl (+) 0 of comp_sizes *)
+  comp_tbls : (int * ((int * int) array * (int * int) array) * int array) array;
+  comp_size : int;
+  mcu_cnt : int;
+  block_cnt : int;
+};;
+
+let get_jpeg_info jpg =
   let huff_tbls =
     let dht_sel dht_type dht_id  =
       let predicate tbl = tbl.dht_type == dht_type && tbl.dht_id == dht_id in
@@ -212,9 +221,17 @@ let extract_mcus scan jpg start_idx =
       | _ -> raise (Failure "Unknown Huffman (type, id)")
     in L.map (fun c -> ( dht_sel 0 c.sos_dc_sel
                        , dht_sel 1 c.sos_ac_sel)) jpg.sos.sos_comps in
+  let quant_tbls =
+    let dqt_sel dqt_id =
+      let predicate tbl = tbl.dqt_id == dqt_id in
+      match L.filter predicate jpg.dqts with
+        [x] -> x.dqt_tbl
+      | _ -> raise (Failure "Unknown Quantization id")
+    in L.map (fun c -> dqt_sel c.sof_tq) jpg.sof.sof_comps in
   let comp_sizes = L.map (fun c -> c.sof_hi*c.sof_vi) jpg.sof.sof_comps in
-  let comp_accs = L.tl (L.scan_left (+) 0 comp_sizes) in
-  let comp_tbls = A.of_list (L.map2 (fun a b -> (a, b)) comp_accs huff_tbls) in
+  let comp_idxs = L.tl (L.scan_left (+) 0 comp_sizes) in
+  let comp_tbls = L.map3 (fun a b c -> (a, b, c)) comp_idxs huff_tbls quant_tbls
+               |> A.of_list in
   let comp_size = L.sum comp_sizes in
   let mcu_cnt =
     let hmax = L.map (fun c -> c.sof_hi) jpg.sof.sof_comps |> L.maximum in
@@ -224,26 +241,34 @@ let extract_mcus scan jpg start_idx =
     printf "hcomps=%d,vcomps=%d\n" hcomps vcomps;
     hcomps * vcomps in
   let block_cnt = mcu_cnt*comp_size in
-  let bufs = A.make_matrix block_cnt 64 0 in
-  printf "comp_size=%d,mcu_cnt=%d\n" comp_size mcu_cnt;
+  { comp_sizes = comp_sizes
+  ; comp_idxs = comp_idxs
+  ; comp_tbls = comp_tbls
+  ; comp_size = comp_size
+  ; mcu_cnt = mcu_cnt
+  ; block_cnt = block_cnt };;
+
+let extract_mcus scan jpg info start_idx =
+  let bufs = A.make_matrix info.block_cnt 64 0 in
+  printf "comp_size=%d,mcu_cnt=%d\n" info.comp_size info.mcu_cnt;
   printf "bufs length=%d\n" (A.length bufs);
-  let rec extract_loop block_idx bit_idx =
-    let rec extract_mcu (n, bit_idx) (comp_cnt, huff_tbl) =
+  let rec ext_loop block_idx bit_idx =
+    let rec ext_mcu (n, bit_idx) (comp_cnt, huff_tbl, quant_tbl) =
       if n == comp_cnt
         then (n, bit_idx)
         else let next_idx = extract_8x8 scan huff_tbl bit_idx bufs.(block_idx+n) in
-             extract_mcu (n+1, next_idx) (comp_cnt, huff_tbl) in
+             ext_mcu (n+1, next_idx) (comp_cnt, huff_tbl, quant_tbl) in
 (*    printf "extract_loop: %d\n" block_idx; *)
-    if block_idx == block_cnt
+    if block_idx == info.block_cnt
       then bit_idx
-      else let (_, next_idx) = A.fold_left extract_mcu (0, bit_idx) comp_tbls in
-           extract_loop (block_idx+comp_size) next_idx in
-  let next_idx = extract_loop 0 start_idx in
+      else let (_, next_idx) = A.fold_left ext_mcu (0, bit_idx) info.comp_tbls in
+           ext_loop (block_idx+info.comp_size) next_idx in
+  let next_idx = ext_loop 0 start_idx in
   let rec fix_diff_dc block_idx =
-    if block_idx == block_cnt
+    if block_idx == info.block_cnt
       then ()
-      else comp_tbls
-        |> flip A.fold_left block_idx (fun n (comp_cnt, _) ->
+      else info.comp_tbls
+        |> flip A.fold_left block_idx (fun n (comp_cnt, _, _) ->
            let rec set_acc prev_dc m =
              if m < block_idx+comp_cnt then begin
                bufs.(m).(0) <- bufs.(m).(0) + prev_dc;
@@ -259,8 +284,9 @@ let test () =
   let raw_data = jpeg_raw () in
   printf "reading...\n";
   let jpg = parse_jpeg raw_data in
+  let info = get_jpeg_info jpg in
   let (next_idx, scan) = extract_scan raw_data jpg.sos.sos_data in
-  let (final_idx, bufs) = extract_mcus scan jpg 0 in
+  let (final_idx, bufs) = extract_mcus scan jpg info 0 in
   (final_idx, bufs);;
 
 let zigzag_order () =

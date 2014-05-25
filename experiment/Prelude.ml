@@ -29,6 +29,11 @@ module L = struct
       | x::xs -> let w = f z x in scan_left_acc w (z::acc) xs
     in scan_left_acc z [] xs
 
+  let rec map3 f xs ys zs = match (xs, ys, zs) with
+      ([], [], []) -> []
+    | (x::xs, y::ys, z::zs) -> f x y z::map3 f xs ys zs
+    | _ -> raise (Failure "map3: Invalid argument")
+
 end
 
 module A = Array;;

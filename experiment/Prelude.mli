@@ -50,6 +50,7 @@ module L :
     val maximum : 'a list -> 'a
     val transpose : 'a list list -> 'a list list
     val scan_left : ('a -> 'b -> 'a) -> 'a -> 'b list -> 'a list
+    val map3 : ('a -> 'b -> 'c -> 'd) -> 'a list -> 'b list -> 'c list -> 'd list
   end
 module A :
   sig
