@@ -21,7 +21,7 @@ let fst3 (a, _, _) = a;;
 
 (* jpeg parse *)
 
-let inname = "..\phw_jpeg\monalisa.jpg";; (* Sys.argv.(1) *)
+let inname = "teatime.jpg";; (* Sys.argv.(1);; *)
 let () = printf "reading file...\n";;
 let jpeg_raw =
   let fin = open_in_bin inname in
@@ -64,9 +64,9 @@ let jpeg_parse_dqt raw_data dqt_idx =
     let (0, table_id) = u4_of_char raw_data idx in
     { dqt_id = table_id
     ; dqt_tbl = A.init 64 (fun i -> int_of_char raw_data.[idx+1 + i]) } in
-  if 65 mod size <> 0
+  if size mod 65 <> 0
     then raise (Jpeg_format_error "DQT table size is not a multiple of 65")
-    else L.map (fun i -> parse_table (dqt_idx+2 + i*65)) (L.range 0 (65/size));;
+    else L.map (fun i -> parse_table (dqt_idx+2 + i*65)) (L.range 0 (size/65));;
 
 type jpeg_dht = {
   dht_type: int;              (* DC = 0, AC = 1 *)
@@ -76,31 +76,39 @@ type jpeg_dht = {
 
 (* parse DHT table to *)
 let jpeg_parse_dht raw_data dht_idx =
-  let size = u16_of_char raw_data dht_idx - 2 - 1 - 16 in
-  let (table_type, table_id) = u4_of_char raw_data (dht_idx+2) in
-  let tree_sizes = flip L.map (L.range 0 16) (fun i ->
-                   int_of_char raw_data.[dht_idx+3 + i]) in
-  let acts =
-    let rec create_actions = function
-        (_, shift, []) -> []
-      | (depth, shift, 0::lens) -> create_actions (depth+1, shift+1, lens)
-      | (depth, shift, len::lens) ->
-        let sll = (depth, fun n -> (n+1) lsl shift) in
-        let inc = L.range 0 (len-1) |> L.map (fun _ -> (depth, fun n -> n+1)) in
-          sll::(inc@create_actions (depth+1, 1, lens)) in
-    create_actions (1, 1, tree_sizes) in
-  let tbl = A.make 65536 (0, 0) in
-  let set_code prev_code (depth, act, data) =
-    let code = act prev_code in
-    for i = 0 to (1 lsl (16-depth) - 1) do
-      tbl.(code lsl (16-depth) + i) <- (depth, data)
-    done;
-    code
-  in L.range 0 size
-  |> L.map2 (fun (depth, act) i ->
-     (depth, act, int_of_char raw_data.[dht_idx+19 + i])) acts
-  |> L.fold_left set_code (-1);
-  { dht_type = table_type; dht_id = table_id; dht_tbl = tbl };;
+  let size = dht_idx + u16_of_char raw_data dht_idx in
+  let parse_dht idx =
+    let (table_type, table_id) = u4_of_char raw_data idx in
+    let tree_sizes = flip L.map (L.range 0 16) (fun i ->
+                     int_of_char raw_data.[idx+1 + i]) in
+    let node_cnt = L.sum tree_sizes in
+    let acts =
+      let rec create_actions = function
+          (_, shift, []) -> []
+        | (depth, shift, 0::lens) -> create_actions (depth+1, shift+1, lens)
+        | (depth, shift, len::lens) ->
+          let sll = (depth, fun n -> (n+1) lsl shift) in
+          let inc = L.range 0 (len-1) |> L.map (fun _ -> (depth, fun n -> n+1)) in
+            sll::(inc@create_actions (depth+1, 1, lens)) in
+      create_actions (1, 1, tree_sizes) in
+    let tbl = A.make 65536 (0, 0) in
+    let set_code prev_code (depth, act, data) =
+      let code = act prev_code in
+      for i = 0 to (1 lsl (16-depth) - 1) do
+        tbl.(code lsl (16-depth) + i) <- (depth, data)
+      done;
+      code
+    in L.range 0 node_cnt
+    |> L.map2 (fun (depth, act) i ->
+       (depth, act, int_of_char raw_data.[idx+17 + i])) acts
+    |> L.fold_left set_code (-1);
+    (idx+17+node_cnt, { dht_type=table_type; dht_id=table_id; dht_tbl=tbl }) in
+  let rec parse_dhts idx =
+    if idx == size
+      then []
+      else let (next_idx, tbl) = parse_dht idx in
+           tbl::parse_dhts next_idx in
+  parse_dhts (dht_idx+2);;
 
 type jpeg_sof_comp = {
     sof_comp_id : int;
@@ -165,7 +173,7 @@ let parse_jpeg raw_data =
     |> L.filter (fun (marker_, _) -> marker == marker_)
     |> L.map (fun (_, pos) -> fn raw_data pos) in
   let dqts = L.concat (seg_filter 0xdb jpeg_parse_dqt) in
-  let dhts = seg_filter 0xc4 jpeg_parse_dht in
+  let dhts = L.concat (seg_filter 0xc4 jpeg_parse_dht) in
   let [sof] = seg_filter 0xc0 jpeg_parse_sof in
   let [sos] = seg_filter 0xda jpeg_parse_sos in
   { dqts = dqts; dhts = dhts; sof = sof; sos = sos };;
