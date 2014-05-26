@@ -296,18 +296,17 @@ let dequantize info bufs =
   in let _ = deq_loop 0
   in ();;
 
-let zigzag_order () =
-  let skew_diag y0 x0 =
-    (if (y0+x0) mod 2 == 0 then (fun x -> x) else L.rev)
-    (L.map (fun i -> (y0-i, x0+i)) (L.range 0 (min y0 (7-x0) + 1))) in
-     L.map2 skew_diag (L.range 0 8@[7;7;7;7;7;7;7]) ([0;0;0;0;0;0;0]@L.range 0 8)
-  |> L.concat
-  |> A.of_list;;
-
 let unzigzag info bufs_flat =
+  let zigzag_order =
+    let skew_diag y0 x0 =
+      (if (y0+x0) mod 2 == 0 then (fun x -> x) else L.rev)
+      (L.map (fun i -> (y0-i, x0+i)) (L.range 0 (min y0 (7-x0) + 1))) in
+       L.map2 skew_diag (L.range 0 8@[7;7;7;7;7;7;7]) ([0;0;0;0;0;0;0]@L.range 0 8)
+    |> L.concat
+    |> A.of_list;;
   let bufs = A.init info.block_cnt (fun _ -> A.make_matrix 8 8 0) in
   flip A.iteri bufs_flat (fun block_idx block ->
-    flip A.iteri (zigzag_order ()) (fun idx (y, x) ->
+    flip A.iteri zigzag_order (fun idx (y, x) ->
       bufs.(block_idx).(y).(x) <- block.(idx)));
   bufs;;
 
@@ -324,8 +323,6 @@ let idct info bufs_8x8s =
        L.map fix_x0_coef (cos_vecs (fun n k -> angle k n))
     |> L.map A.of_list
     |> A.of_list in
-  let idct2_vecs =
-    A.init 8 (fun i -> A.init 8 (fun j -> raise (Failure "TODO"))) in
   let bufs = A.make info.block_cnt 0 in
   bufs;;
 
