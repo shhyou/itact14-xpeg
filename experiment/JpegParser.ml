@@ -266,32 +266,32 @@ let get_jpeg_info jpg =
 
 let blit_plane jpg info bufs_idct =
   let buf = A.make_matrix jpg.sof.sof_height jpg.sof.sof_width (0,0,0) in
-  let vi_hi = L.map (fun c -> (c.sof_vi, c.sof_hi)) jpg.sof.sof_comps
+  let hi_vi = L.map (fun c -> (c.sof_hi, c.sof_vi)) jpg.sof.sof_comps
            |> A.of_list in
   let blit_mcu y0 x0 block_idx =
-    for y = 0 to info.comps_vmax*8 do
-      for x = 0 to info.comps_hmax*8 do
+    for y = 0 to info.comps_hmax*8-1 do
+      for x = 0 to info.comps_vmax*8-1 do
         if  y0+y<jpg.sof.sof_height && x0+x<jpg.sof.sof_width then begin
           let get_val comp_idx =
-            let yreal = y*fst vi_hi.(comp_idx)/info.comps_vmax in
-            let xreal = x*snd vi_hi.(comp_idx)/info.comps_hmax in
-            let (v, y8) = (yreal / 8, yreal mod 8) in
-            let (h, x8) = (xreal / 8, xreal mod 8) in
+            let yreal = y*fst hi_vi.(comp_idx)/info.comps_hmax in
+            let xreal = x*snd hi_vi.(comp_idx)/info.comps_vmax in
+            let (h, y8) = (yreal / 8, yreal mod 8) in
+            let (v, x8) = (xreal / 8, xreal mod 8) in
             let n = if comp_idx > 0
                       then fst3 info.comp_tbls.(comp_idx-1)
                       else 0 in
-            let m = v*snd vi_hi.(comp_idx) + h in
-            printf "  (%d,%d) -> (%d+%d+%d,%d,%d)\n" y x block_idx n m y8 x8; 
-            bufs_idct.(block_idx+n+m).(y8).(x8) in
-          printf "(%d,%d)" (y0+y) (x0+x);
+            let m = h*snd hi_vi.(comp_idx) + v in
+(*            printf "  (%d,%d) -> (%d+%d+%d,%d,%d)\n" y x block_idx n m y8 x8; *)
+            bufs_idct.(block_idx+m+n).(y8).(x8) in
+(*          printf "(%d,%d)\n" (y0+y) (x0+x); *)
           buf.(y0+y).(x0+x) <- (get_val 0, get_val 1, get_val 2)
         end
       done
     done in
-  for v = 0 to info.comps_v do
-    for h = 0 to info.comps_h do
-      blit_mcu (v*info.comps_vmax*8) (h*info.comps_hmax*8)
-               ((v*info.comps_h + h)*info.comp_size)
+  for h = 0 to info.comps_h-1 do
+    for v = 0 to info.comps_v-1 do
+      blit_mcu (h*info.comps_hmax*8) (v*info.comps_vmax*8)
+               ((h*info.comps_v + v)*info.comp_size)
     done
   done;
   buf;;
