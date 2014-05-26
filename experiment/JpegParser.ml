@@ -21,13 +21,18 @@ let fst3 (a, _, _) = a;;
 
 (* jpeg parse *)
 
+let inname = "..\phw_jpeg\monalisa.jpg";; (* Sys.argv.(1) *)
+let () = printf "reading file...\n";;
 let jpeg_raw =
-  let fin = open_in_bin "rgb.jpg" in
+  let fin = open_in_bin inname in
   let len = in_channel_length fin in
+  printf "String.create...\n";
   let data = String.create len in
+  printf "really_input...\n";
   really_input fin data 0 len;
   close_in fin;
   fun () -> data;;
+let () = printf "reading done\n";;
 
 exception Jpeg_format_error of string;;
 
@@ -193,7 +198,7 @@ let extract_8x8 raw_data (dc_tbl, ac_tbl) start_idx buf =
   let (dc_hufflen, dc_huff) = dc_tbl.(u16_of_bits start_idx lsr 15) in
 (*  printf "dc_hufflen = %d, dc_huff = %d\n" dc_hufflen dc_huff; *)
   buf.(0) <- get_signed_int (u16_of_bits (start_idx+dc_hufflen)) dc_huff; (*diff*)
-  printf "dc_diff: %d\n" buf.(0);
+(*  printf "dc_diff: %d\n" buf.(0); *)
   let rec extract_ac idx = function
       64 -> idx
     | n -> match ac_tbl.(u16_of_bits idx lsr 15) with
@@ -243,6 +248,7 @@ let get_jpeg_info jpg =
   let vmax = L.map (fun c -> c.sof_vi) jpg.sof.sof_comps |> L.maximum in
   let hcomps = (jpg.sof.sof_height + 8*hmax - 1)/(8*hmax) in
   let vcomps = (jpg.sof.sof_width  + 8*vmax - 1)/(8*vmax) in
+  printf "height=%d,width=%d, vmax=%d,hmax=%d\n" jpg.sof.sof_height jpg.sof.sof_width vmax hmax;
   printf "hcomps=%d,vcomps=%d\n" hcomps vcomps;
   let mcu_cnt =
     hcomps * vcomps in
@@ -275,8 +281,9 @@ let blit_plane jpg info bufs_idct =
                       then fst3 info.comp_tbls.(comp_idx-1)
                       else 0 in
             let m = v*snd vi_hi.(comp_idx) + h in
-(*            printf "(%d,%d) -> (%d,%d,%d)\n" y x (block_idx+n+m) y8 x8; *)
+            printf "  (%d,%d) -> (%d+%d+%d,%d,%d)\n" y x block_idx n m y8 x8; 
             bufs_idct.(block_idx+n+m).(y8).(x8) in
+          printf "(%d,%d)" (y0+y) (x0+x);
           buf.(y0+y).(x0+x) <- (get_val 0, get_val 1, get_val 2)
         end
       done
@@ -305,19 +312,25 @@ let extract_mcus scan info start_idx =
       else let (_, next_idx) = A.fold_left ext_mcu (0, bit_idx) info.comp_tbls in
            ext_loop (block_idx+info.comp_size) next_idx in
   let next_idx = ext_loop 0 start_idx in
-  let rec fix_diff_dc block_idx =
-    if block_idx == info.block_cnt
-      then ()
-      else info.comp_tbls
-        |> flip A.fold_left block_idx (fun n (comp_cnt, _, _) ->
-           let rec set_acc prev_dc m =
-             if m < block_idx+comp_cnt then begin
-               bufs.(m).(0) <- bufs.(m).(0) + prev_dc;
-               set_acc bufs.(m).(0) (m+1)
-             end
-           in set_acc 0 n; block_idx+comp_cnt)
-        |> fix_diff_dc in
-  fix_diff_dc 0;
+  let fix_diff_dc comp_idx =
+    let begin_ = if comp_idx == 0 then 0 else fst3 info.comp_tbls.(comp_idx-1) in
+    let end_ = fst3 info.comp_tbls.(comp_idx) in
+    let rec fix_loop prev_dc block_idx =
+      if block_idx < info.block_cnt then begin
+        let rec set_acc n dc =
+          if n == end_
+            then dc
+            else begin
+              bufs.(block_idx+n).(0) <- bufs.(block_idx+n).(0) + dc;
+              set_acc (n+1) bufs.(block_idx+n).(0)
+            end in
+        let next_dc = set_acc begin_ prev_dc in
+        fix_loop next_dc (block_idx+info.comp_size)
+      end in
+    fix_loop 0 0 in
+  for idx = 0 to 2 do
+    fix_diff_dc idx;
+  done;
   (next_idx, bufs);;
 
 let dequantize info bufs =
@@ -408,15 +421,24 @@ let test () =
   printf "reading...\n";
   let jpg = parse_jpeg raw_data in
   let info = get_jpeg_info jpg in
+  printf "extract_scan...\n";
   let (next_idx, scan) = extract_scan raw_data jpg.sos.sos_data in
+  printf "extract_mcus...\n";
   let (final_idx, bufs_flat) = extract_mcus scan info 0 in
+  printf "dequantize...\n";
   dequantize info bufs_flat;
+  printf "unzigzag...\n";
   let bufs_8x8s = unzigzag info bufs_flat in
+  printf "idct...\n";
   let bufs_idct = idct info bufs_8x8s in
+  printf "blit_plane...\n";
   let bufs_ycbcr = blit_plane jpg info bufs_idct in
   let bmp = Bitmap.make jpg.sof.sof_height jpg.sof.sof_width in
+  printf "rvb_conv...\n";
   rgb_conv jpg bufs_ycbcr bmp.bits;
   let fout = open_out_bin "out.bmp" in
   Bitmap.output_bmp fout bmp;
   close_out fout;
   bmp;;
+
+test ();;
