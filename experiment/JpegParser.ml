@@ -354,10 +354,10 @@ let idct info bufs_8x8s =
     let cos_vecs f = flip L.map (L.range 0 8) (fun k ->
                        flip L.map (L.range 0 8) (fun n ->
                          f n k *. normalize_factor)) in
-    let fix_x0_coef (_::xs) = 0.5 *. normalize_factor::xs in
+    let fix_x0_coef (_::xs) = sqrt (1.0 /. 2.0) *. normalize_factor::xs in
        L.map fix_x0_coef (cos_vecs (fun n k -> angle k n))
     |> L.map A.of_list
-    |> A.of_list in (* strange: where's 1/sqrt(2)? *)
+    |> A.of_list in
   let idct vec =
     let dot u v =
       let rec sumf i acc =
@@ -367,14 +367,18 @@ let idct info bufs_8x8s =
       sumf 0 0.0 in
     A.map (dot vec) idct1_vecs in
   let bufs_float = A.init info.block_cnt (fun i ->
-    A.init 8 (fun j -> A.init 8 (fun k -> float_of_int bufs_8x8s.(i).(k).(j)))) in
+    A.init 8 (fun j ->
+      A.init 8 (fun k ->
+        float_of_int bufs_8x8s.(i).(k).(j)))) in
   flip A.iter bufs_float (fun block ->
     A.iteri (fun i col -> block.(i) <- idct col) block);
   A.iter A.transpose bufs_float;
   flip A.iter bufs_float (fun block ->
     A.iteri (fun i row -> block.(i) <- idct row) block);
   let bufs = A.init info.block_cnt (fun i ->
-    A.init 8 (fun j -> A.init 8 (fun k -> int_of_float bufs_float.(i).(j).(k)))) in
+    A.init 8 (fun j ->
+      A.init 8 (fun k ->
+        int_of_float (bufs_float.(i).(j).(k) +. 0.5)))) in
   bufs;;
 
 let rgb_conv jpg bufs_ycbcr =
@@ -383,10 +387,15 @@ let rgb_conv jpg bufs_ycbcr =
   flip A.iteri bufs_ycbcr (fun y row ->
     flip A.iteri row (fun x (yi, cbi, cri) ->
       let [yf; cbf; crf] = L.map float_of_int [yi; cbi; cri] in
-      let rf = yf +. 1.402 *. (crf -. 128.0) in
-      let gf = yf -. 0.34414 *. (cbf -. 128.0) -. 0.71414 *. (crf -. 128.0) in
-      let bf = yf +. 1.772 *. (cbf -. 128.0) in
-      let [rc; gc; bc] = L.map int_of_float [rf; gf; bf] in (*|> L.map char_of_int in*)
+      let rf = yf +. 1.402 *. crf in
+      let gf = yf -. 0.34414 *. cbf -. 0.71414 *. crf in
+      let bf = yf +. 1.772 *. cbf in
+      let fix_shift f =
+        let m = 128 + int_of_float f in
+        if m < 0 then 0
+        else if m > 255 then 255
+        else m in
+      let [rc; gc; bc] = L.map fix_shift [rf; gf; bf] in (*|> L.map char_of_int in*)
       bufs.(y).(x) <- (rc, gc, bc)));
   bufs;;
 
