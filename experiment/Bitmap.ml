@@ -66,7 +66,7 @@ let output_bmp co bmp =
       L.iter (output_char co) [b; g; r]);
     output_string co row_padding);;
 
-let make_bmp height width =
+let make height width =
   { info = { bmp_info_hdrsize = 40; width = width; height = height }
   ; bits = A.make_matrix height width ('\x00','\x00','\x00') };;
 

@@ -19,6 +19,6 @@ type bmp = {
 
 exception BitmapFormatNotSupported of char * char
 
-val make_bmp : int -> int -> bmp
+val make : int -> int -> bmp (* height -> width -> bmp *)
 val input_bmp : in_channel -> bmp
 val output_bmp : out_channel -> bmp -> unit
