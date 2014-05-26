@@ -303,13 +303,12 @@ let unzigzag info bufs_flat =
       (L.map (fun i -> (y0-i, x0+i)) (L.range 0 (min y0 (7-x0) + 1))) in
        L.map2 skew_diag (L.range 0 8@[7;7;7;7;7;7;7]) ([0;0;0;0;0;0;0]@L.range 0 8)
     |> L.concat
-    |> A.of_list;;
+    |> A.of_list in
   let bufs = A.init info.block_cnt (fun _ -> A.make_matrix 8 8 0) in
   flip A.iteri bufs_flat (fun block_idx block ->
     flip A.iteri zigzag_order (fun idx (y, x) ->
       bufs.(block_idx).(y).(x) <- block.(idx)));
   bufs;;
-
 
 let idct info bufs_8x8s =
   let idct1_vecs =
@@ -322,9 +321,32 @@ let idct info bufs_8x8s =
     let fix_x0_coef (_::xs) = 0.5 *. normalize_factor::xs in
        L.map fix_x0_coef (cos_vecs (fun n k -> angle k n))
     |> L.map A.of_list
-    |> A.of_list in
-  let bufs = A.make info.block_cnt 0 in
+    |> A.of_list in (* strange: where's 1/sqrt(2)? *)
+  let idct vec =
+    let dot u v =
+      let rec sumf i acc =
+        if i == 8
+          then acc
+          else sumf (i+1) (acc +. u.(i) *. v.(i)) in
+      sumf 0 0.0 in
+    A.map (dot vec) idct1_vecs in
+  let bufs_float = A.init info.block_cnt (fun i ->
+    A.init 8 (fun j -> A.init 8 (fun k -> float_of_int bufs_8x8s.(i).(k).(j)))) in
+  flip A.iter bufs_float (fun block ->
+    A.iteri (fun i col -> block.(i) <- idct col) block);
+  A.iter A.transpose bufs_float;
+  flip A.iter bufs_float (fun block ->
+    A.iteri (fun i row -> block.(i) <- idct row) block);
+  let bufs = A.init info.block_cnt (fun i ->
+    A.init 8 (fun j -> A.init 8 (fun k -> int_of_float bufs_float.(i).(j).(k)))) in
   bufs;;
+
+let blit_plane jpg info bufs_idct =
+  let bufs =
+    A.init jpg.sof.sof_height (fun y ->
+      A.init jpg.sof.sof_width (fun x ->
+        (0, 0, 0)))
+  in bufs;;
 
 (* TODO: parse jpeg using a loop (sequentially); remove jpeg_segmenting *)
 let test () =
@@ -336,5 +358,5 @@ let test () =
   let (final_idx, bufs_flat) = extract_mcus scan info 0 in
   dequantize info bufs_flat;
   let bufs_8x8s = unzigzag info bufs_flat in
-  let bufs = idct info bufs_8x8s in
-  (final_idx, bufs);;
+  let bufs_idct = idct info bufs_8x8s in
+  (final_idx, bufs_idct);;

@@ -81,4 +81,6 @@ module A :
     val fast_sort : ('a -> 'a -> int) -> 'a array -> unit
     external unsafe_get : 'a array -> int -> 'a = "%array_unsafe_get"
     external unsafe_set : 'a array -> int -> 'a -> unit = "%array_unsafe_set"
+
+    val transpose : 'a array array -> unit
   end
