@@ -17,6 +17,8 @@ let u4_of_char raw_data idx =
   let n = int_of_char raw_data.[idx] in
   (n / 16, n mod 16);;
 
+let fst3 (a, _, _) = a;;
+
 (* jpeg parse *)
 
 let jpeg_raw =
@@ -208,6 +210,10 @@ type jpeg_info = {
   comp_idxs : int list; (* scanl (+) 0 of comp_sizes *)
   comp_tbls : (int * ((int * int) array * (int * int) array) * int array) array;
   comp_size : int;
+  comps_h : int;
+  comps_v : int;
+  comps_hmax : int;
+  comps_vmax : int;
   mcu_cnt : int;
   block_cnt : int;
 };;
@@ -233,20 +239,50 @@ let get_jpeg_info jpg =
   let comp_tbls = L.map3 (fun a b c -> (a, b, c)) comp_idxs huff_tbls quant_tbls
                |> A.of_list in
   let comp_size = L.sum comp_sizes in
+  let hmax = L.map (fun c -> c.sof_hi) jpg.sof.sof_comps |> L.maximum in
+  let vmax = L.map (fun c -> c.sof_vi) jpg.sof.sof_comps |> L.maximum in
+  let hcomps = (jpg.sof.sof_height + 8*hmax - 1)/(8*hmax) in
+  let vcomps = (jpg.sof.sof_width  + 8*vmax - 1)/(8*vmax) in
+  printf "hcomps=%d,vcomps=%d\n" hcomps vcomps;
   let mcu_cnt =
-    let hmax = L.map (fun c -> c.sof_hi) jpg.sof.sof_comps |> L.maximum in
-    let vmax = L.map (fun c -> c.sof_vi) jpg.sof.sof_comps |> L.maximum in
-    let hcomps = (jpg.sof.sof_height + 8*hmax - 1)/(8*hmax) in
-    let vcomps = (jpg.sof.sof_width  + 8*vmax - 1)/(8*vmax) in
-    printf "hcomps=%d,vcomps=%d\n" hcomps vcomps;
     hcomps * vcomps in
   let block_cnt = mcu_cnt*comp_size in
   { comp_sizes = comp_sizes
   ; comp_idxs = comp_idxs
   ; comp_tbls = comp_tbls
   ; comp_size = comp_size
+  ; comps_h = hcomps
+  ; comps_v = vcomps
+  ; comps_hmax = hmax
+  ; comps_vmax = vmax
   ; mcu_cnt = mcu_cnt
   ; block_cnt = block_cnt };;
+
+let blit_plane jpg info bufs_idct =
+  let buf = A.make_matrix jpg.sof.sof_height jpg.sof.sof_width (0,0,0) in
+  let vi_hi = L.map (fun c -> (c.sof_vi, c.sof_hi)) jpg.sof.sof_comps
+           |> A.of_list in
+  let blit_mcu y0 x0 block_idx =
+    for y = 0 to info.comps_vmax*8 do
+      for x = 0 to info.comps_hmax*8 do
+        if  y0+y<jpg.sof.sof_height && x0+x<jpg.sof.sof_width then begin
+          let get_val comp_idx =
+            let yreal = y*fst vi_hi.(comp_idx)/info.comps_vmax in
+            let xreal = x*snd vi_hi.(comp_idx)/info.comps_hmax in
+            let (v, y8) = (yreal / 8, yreal mod 8) in
+            let (h, x8) = (xreal / 8, xreal mod 8) in
+            let n = if comp_idx > 0
+                      then fst3 info.comp_tbls.(comp_idx-1)
+                      else 0 in
+            let m = v*snd vi_hi.(comp_idx) + h in
+(*            printf "(%d,%d) -> (%d,%d,%d)\n" y x (block_idx+n+m) y8 x8; *)
+            bufs_idct.(block_idx+n+m).(y8).(x8) in
+          buf.(y0+y).(x0+x) <- (get_val 0, get_val 1, get_val 2)
+        end
+      done
+    done in
+  blit_mcu 0 0 0;
+  buf;;
 
 let extract_mcus scan info start_idx =
   let bufs = A.make_matrix info.block_cnt 64 0 in
@@ -341,12 +377,18 @@ let idct info bufs_8x8s =
     A.init 8 (fun j -> A.init 8 (fun k -> int_of_float bufs_float.(i).(j).(k)))) in
   bufs;;
 
-let blit_plane jpg info bufs_idct =
+let rgb_conv jpg bufs_ycbcr =
   let bufs =
-    A.init jpg.sof.sof_height (fun y ->
-      A.init jpg.sof.sof_width (fun x ->
-        (0, 0, 0)))
-  in bufs;;
+    A.make_matrix jpg.sof.sof_height jpg.sof.sof_width (0,0,0) in (*('\x00','\x00','\x00') in*)
+  flip A.iteri bufs_ycbcr (fun y row ->
+    flip A.iteri row (fun x (yi, cbi, cri) ->
+      let [yf; cbf; crf] = L.map float_of_int [yi; cbi; cri] in
+      let rf = yf +. 1.402 *. (crf -. 128.0) in
+      let gf = yf -. 0.34414 *. (cbf -. 128.0) -. 0.71414 *. (crf -. 128.0) in
+      let bf = yf +. 1.772 *. (cbf -. 128.0) in
+      let [rc; gc; bc] = L.map int_of_float [rf; gf; bf] in (*|> L.map char_of_int in*)
+      bufs.(y).(x) <- (rc, gc, bc)));
+  bufs;;
 
 (* TODO: parse jpeg using a loop (sequentially); remove jpeg_segmenting *)
 let test () =
@@ -359,4 +401,6 @@ let test () =
   dequantize info bufs_flat;
   let bufs_8x8s = unzigzag info bufs_flat in
   let bufs_idct = idct info bufs_8x8s in
-  (final_idx, bufs_idct);;
+  let bufs_ycbcr = blit_plane jpg info bufs_idct in
+  let bufs_rgb = rgb_conv jpg bufs_ycbcr in
+  (final_idx, bufs_rgb);;
