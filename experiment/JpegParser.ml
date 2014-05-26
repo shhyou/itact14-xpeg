@@ -281,7 +281,12 @@ let blit_plane jpg info bufs_idct =
         end
       done
     done in
-  blit_mcu 0 0 0;
+  for v = 0 to info.comps_v do
+    for h = 0 to info.comps_h do
+      blit_mcu (v*info.comps_vmax*8) (h*info.comps_hmax*8)
+               ((v*info.comps_h + h)*info.comp_size)
+    done
+  done;
   buf;;
 
 let extract_mcus scan info start_idx =
@@ -317,7 +322,7 @@ let extract_mcus scan info start_idx =
 
 let dequantize info bufs =
   let rec deq_loop block_idx =
-    printf "block_idx=%d\n" block_idx;
+(*    printf "block_idx=%d\n" block_idx; *)
     if block_idx == info.block_cnt
       then block_idx
       else info.comp_tbls
@@ -381,9 +386,7 @@ let idct info bufs_8x8s =
         int_of_float (bufs_float.(i).(j).(k) +. 0.5)))) in
   bufs;;
 
-let rgb_conv jpg bufs_ycbcr =
-  let bufs =
-    A.make_matrix jpg.sof.sof_height jpg.sof.sof_width (0,0,0) in (*('\x00','\x00','\x00') in*)
+let rgb_conv jpg bufs_ycbcr bufs =
   flip A.iteri bufs_ycbcr (fun y row ->
     flip A.iteri row (fun x (yi, cbi, cri) ->
       let [yf; cbf; crf] = L.map float_of_int [yi; cbi; cri] in
@@ -395,9 +398,9 @@ let rgb_conv jpg bufs_ycbcr =
         if m < 0 then 0
         else if m > 255 then 255
         else m in
-      let [rc; gc; bc] = L.map fix_shift [rf; gf; bf] in (*|> L.map char_of_int in*)
-      bufs.(y).(x) <- (rc, gc, bc)));
-  bufs;;
+      let [rc; gc; bc] = L.map fix_shift [rf; gf; bf]
+                      |> L.map char_of_int in
+      bufs.(jpg.sof.sof_height - 1 - y).(x) <- (rc, gc, bc)));;
 
 (* TODO: parse jpeg using a loop (sequentially); remove jpeg_segmenting *)
 let test () =
@@ -411,5 +414,9 @@ let test () =
   let bufs_8x8s = unzigzag info bufs_flat in
   let bufs_idct = idct info bufs_8x8s in
   let bufs_ycbcr = blit_plane jpg info bufs_idct in
-  let bufs_rgb = rgb_conv jpg bufs_ycbcr in
-  (final_idx, bufs_rgb);;
+  let bmp = Bitmap.make jpg.sof.sof_height jpg.sof.sof_width in
+  rgb_conv jpg bufs_ycbcr bmp.bits;
+  let fout = open_out_bin "out.bmp" in
+  Bitmap.output_bmp fout bmp;
+  close_out fout;
+  bmp;;
