@@ -21,20 +21,6 @@ let fst3 (a, _, _) = a;;
 
 (* jpeg parse *)
 
-let inname = Sys.argv.(1)
-let () = printf "[+] reading file...\n%!";;
-
-let jpeg_raw =
-  let fin = open_in_bin inname in
-  let len = in_channel_length fin in
-  printf "[+] String.create...\n%!";
-  let data = String.create len in
-  printf "[+] really_input...\n%!";
-  really_input fin data 0 len;
-  close_in fin;
-  fun () -> data;;
-let () = printf "[+] reading done\n";  printf "%!";;
-
 exception Jpeg_format_error of string;;
 
 let jpeg_segmenting raw_data =
@@ -449,9 +435,22 @@ let blit_plane jpg info bufs_idct buf =
   done
 
 (* TODO: parse jpeg using a loop (sequentially); remove jpeg_segmenting *)
-let test () =
-  let raw_data = jpeg_raw () in
-  printf "[+] reading...\n%!";
+let main () =
+  if A.length Sys.argv<2 || A.length Sys.argv>3
+    then raise (Invalid_argument "Usage: jpegparser INPUT.JPG [OUT.BMP]");
+  let inname = Sys.argv.(1) in
+  let outname = if A.length Sys.argv==3 then Sys.argv.(2) else "out.bmp" in
+  printf "[+] reading file...\n%!";
+  let raw_data =
+    let fin = open_in_bin inname in
+    let len = in_channel_length fin in
+    printf "[+] String.create...\n%!";
+    let data = String.create len in
+    printf "[+] really_input...\n%!";
+    really_input fin data 0 len;
+    close_in fin;
+    data in
+  printf "[+] reading done\nparsing...\n%!";
   let jpg = parse_jpeg raw_data in
   let info = get_jpeg_info jpg in
   printf "[+] extract_scan...\n%!";
@@ -468,8 +467,8 @@ let test () =
   let bmp = Bitmap.make jpg.sof.sof_height jpg.sof.sof_width in
   blit_plane jpg info bufs_idct bmp.bits;
   printf "[+] Outputing res...\n%!";
-  let fout = open_out_bin "out.bmp" in
+  let fout = open_out_bin outname in
   Bitmap.output_bmp fout bmp;
   close_out fout;;
 
-test ();;
+main ();;
