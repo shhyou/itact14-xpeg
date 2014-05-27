@@ -345,28 +345,40 @@ let idct info bufs_8x8s =
       done
     done in
   let idct =
-    let idct1_vecs =
-      let pi = acos (-1.0) in
-      let normalize_factor = sqrt (2.0 /. 8.0) in
-      let angle n k = cos (pi *. (float_of_int n +. 0.5) *. float_of_int k /. 8.0) in
-      let cos_vecs f = flip L.map (L.range 0 8) (fun k ->
-                         flip L.map (L.range 0 8) (fun n ->
-                           f n k *. normalize_factor)) in
-      let fix_x0_coef (_::xs) = sqrt (1.0 /. 2.0) *. normalize_factor::xs in
-         L.map fix_x0_coef (cos_vecs (fun n k -> angle k n))
-      |> L.map (L.map f8_of_float)
-      |> L.map A.of_list
-      |> A.of_list in
-    let buf = A.make 8 0 in
-    let dot block base_idx idx v =
-      let rec sumf i acc =
-        if i == 8
-          then buf.(idx) <- acc
-          else sumf (i+1) (acc +: (block.(base_idx+i) *: v.(i))) in
-      sumf 0 0 in
+    (* http://www.reznik.org/papers/SPIE07_MPEG-C_IDCT.pdf Fig. 2, butterfly
+     a (a0, a4, a2, a6, a7, a3, a5, a1)
+     b (a0, a4, a2, a6, a1-a7, γa3, γa5, a1+a7)
+     c (a0+a4, a0-a4, αa2 - βa6, αa6 + βa2, b7+b5, b1-b3, b7-b5, b1+b3)
+     d (c0+c6, c4+c2, c4-c2, c0-c6, ηc7 - θc1, δc3 - εc5, δc5 + εc3, ηc1 + θc7)
+     e (d0+d1, d4+d5, d2+d3, d6+d7, d6-d7, d2-d3, d4-d5, d0-d1)
+    *)
+    let pi = acos (-1.0) in
+    let r = f8_of_float (sqrt (2.0)) in
+    let a = f8_of_float (sqrt (2.0) *. cos (3.0 *. pi /. 8.0)) in
+    let b = f8_of_float (sqrt (2.0) *. sin (3.0 *. pi /. 8.0)) in
+    let d = f8_of_float (cos (pi /. 16.0)) in
+    let e = f8_of_float (sin (pi /. 16.0)) in
+    let n = f8_of_float (cos (3.0 *. pi /. 16.0)) in
+    let t = f8_of_float (sin (3.0 *. pi /. 16.0)) in
     fun block idx ->
-      A.iteri (dot block idx) idct1_vecs;
-      A.blit buf 0 block idx 8 in
+      let (b7, b1) = ( block.(idx+1) -: block.(idx+7)
+                     , block.(idx+1) +: block.(idx+7) ) in
+      let (b3, b5) = (r *: block.(idx+3), r *: block.(idx+5)) in
+      let (c0, c4) = (block.(idx) +: block.(idx+4), block.(idx) -: block.(idx+4)) in
+      let (c2, c6) = ( a *: block.(idx+2) -: b *: block.(idx+6)
+                     , a *: block.(idx+6) +: b *: block.(idx+2) ) in
+      let (c7, c3, c5, c1) = (b7+:b5, b1-:b3, b7-:b5, b1+:b3) in
+      let (d0, d4, d2, d6) = (c0+:c6, c4+:c2, c4-:c2, c0-:c6) in
+      let (d7, d3) = (n*:c7 -: t*:c1, d*:c3 -: e*:c5) in
+      let (d5, d1) = (d*:c5 +: e*:c3, n*:c1 +: t*:c7) in
+      block.(idx) <- d0 +: d1;
+      block.(idx+1) <- d4 +: d5;
+      block.(idx+2) <- d2 +: d3;
+      block.(idx+3) <- d6 +: d7;
+      block.(idx+4) <- d6 -: d7;
+      block.(idx+5) <- d2 -: d3;
+      block.(idx+6) <- d4 -: d5;
+      block.(idx+7) <- d0 -: d1 in
   printf "    buf init\n%!";
   let bufs_float = A.init info.block_cnt (fun i ->
     let arr = A.map f8_of_int bufs_8x8s.(i) in
@@ -385,7 +397,8 @@ let idct info bufs_8x8s =
       idct block (i*8) 
     done);
   printf "    blit back\n%!";
-  let bufs = A.init info.block_cnt (fun i -> A.map int_of_f8 bufs_float.(i)) in
+  let bufs = A.init info.block_cnt (fun i -> A.map (fun f -> int_of_f8 f / 8)
+                                                   bufs_float.(i)) in
   bufs;;
 
 let blit_plane jpg info bufs_idct buf =
