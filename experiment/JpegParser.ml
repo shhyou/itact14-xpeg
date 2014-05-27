@@ -21,7 +21,7 @@ let fst3 (a, _, _) = a;;
 
 (* jpeg parse *)
 
-let inname = Sys.argv.(1);;
+let inname = Sys.argv.(1)
 let () = printf "[+] reading file...\n%!";;
 
 let jpeg_raw =
@@ -40,10 +40,16 @@ exception Jpeg_format_error of string;;
 let jpeg_segmenting raw_data =
   let [ch_ff; ch_00; ch_EOI] = L.map char_of_int [0xff; 0x00; 0xd9]
   in let rec find_candidates acc start_idx =
-    try let idx = String.index_from raw_data start_idx ch_ff
-        in if raw_data.[idx+1] == ch_EOI
-             then L.rev acc
-             else find_candidates (idx::acc) (idx+1)
+    try let idx = String.index_from raw_data start_idx ch_ff in
+        match raw_data.[idx+1] with
+          '\xd9' -> L.rev acc
+        | '\x00' -> find_candidates acc (idx+1)
+        | '\xff' -> find_candidates acc (idx+1)
+        | n when (0xe0 <= int_of_char n && int_of_char n <= 0xef)
+              || n == '\xfe' || n == '\xc0' || n == '\xda'
+              || n == '\xc4' || n == '\xdb' ->
+          find_candidates (idx::acc) (idx+2 + u16_of_char raw_data (idx+2))
+        | _ -> find_candidates (idx::acc) (idx+1)
     with Not_found -> raise (Jpeg_format_error "EOI (0xff 0xd9) not found")
   in let parse_result =
        find_candidates [] 0
@@ -330,10 +336,10 @@ let unzigzag info bufs_flat =
        L.map2 skew_diag (L.range 0 8@[7;7;7;7;7;7;7]) ([0;0;0;0;0;0;0]@L.range 0 8)
     |> L.concat
     |> A.of_list in
-  let bufs = A.init info.block_cnt (fun _ -> A.make_matrix 8 8 0) in
+  let bufs = A.make_matrix info.block_cnt 64 0 in
   flip A.iteri bufs_flat (fun block_idx block ->
     flip A.iteri zigzag_order (fun idx (y, x) ->
-      bufs.(block_idx).(y).(x) <- block.(idx)));
+      bufs.(block_idx).(y*8+x) <- block.(idx)));
   bufs;;
 
 let ( +: ) a b = a + b;;
@@ -344,47 +350,56 @@ let f8_of_int n = n lsl 8;;
 let int_of_f8 n = n asr 8;;
 
 let idct info bufs_8x8s =
-  let idct1_vecs =
-    let pi = acos (-1.0) in
-    let normalize_factor = sqrt (2.0 /. 8.0) in
-    let angle n k = cos (pi *. (float_of_int n +. 0.5) *. float_of_int k /. 8.0) in
-    let cos_vecs f = flip L.map (L.range 0 8) (fun k ->
-                       flip L.map (L.range 0 8) (fun n ->
-                         f n k *. normalize_factor)) in
-    let fix_x0_coef (_::xs) = sqrt (1.0 /. 2.0) *. normalize_factor::xs in
-       L.map fix_x0_coef (cos_vecs (fun n k -> angle k n))
-    |> L.map (L.map f8_of_float)
-    |> L.map A.of_list
-    |> A.of_list in
+  let transpose block =
+    for i = 0 to 7 do
+      for j = i+1 to 7 do
+        let t = block.(i*8 + j) in
+        block.(i*8 + j) <- block.(j*8 + i);
+        block.(j*8 + i) <- t
+      done
+    done in
   let idct =
+    let idct1_vecs =
+      let pi = acos (-1.0) in
+      let normalize_factor = sqrt (2.0 /. 8.0) in
+      let angle n k = cos (pi *. (float_of_int n +. 0.5) *. float_of_int k /. 8.0) in
+      let cos_vecs f = flip L.map (L.range 0 8) (fun k ->
+                         flip L.map (L.range 0 8) (fun n ->
+                           f n k *. normalize_factor)) in
+      let fix_x0_coef (_::xs) = sqrt (1.0 /. 2.0) *. normalize_factor::xs in
+         L.map fix_x0_coef (cos_vecs (fun n k -> angle k n))
+      |> L.map (L.map f8_of_float)
+      |> L.map A.of_list
+      |> A.of_list in
     let buf = A.make 8 0 in
-    let dot u idx v =
+    let dot block base_idx idx v =
       let rec sumf i acc =
         if i == 8
           then buf.(idx) <- acc
-          else sumf (i+1) (acc +: (u.(i) *: v.(i))) in
+          else sumf (i+1) (acc +: (block.(base_idx+i) *: v.(i))) in
       sumf 0 0 in
-    fun vec ->
-      A.iteri (dot vec) idct1_vecs;
-      A.blit buf 0 vec 0 8 in
+    fun block idx ->
+      A.iteri (dot block idx) idct1_vecs;
+      A.blit buf 0 block idx 8 in
   printf "    buf init\n%!";
   let bufs_float = A.init info.block_cnt (fun i ->
-    A.init 8 (fun j ->
-      A.init 8 (fun k ->
-        f8_of_int bufs_8x8s.(i).(k).(j)))) in
+    let arr = A.map f8_of_int bufs_8x8s.(i) in
+    transpose arr;
+    arr) in
   printf "    dot\n%!";
   flip A.iter bufs_float (fun block ->
-    A.iter (fun col -> idct col) block);
+    for i = 0 to 7 do
+      idct block (i*8) 
+    done);
   printf "    transpose\n%!";
-  A.iter A.transpose bufs_float;
+  A.iter transpose bufs_float;
   printf "    dot\n%!";
   flip A.iter bufs_float (fun block ->
-    A.iter (fun row -> idct row) block);
+    for i = 0 to 7 do
+      idct block (i*8) 
+    done);
   printf "    blit back\n%!";
-  let bufs = A.init info.block_cnt (fun i ->
-    A.init 8 (fun j ->
-      A.init 8 (fun k ->
-        int_of_f8 bufs_float.(i).(j).(k)))) in
+  let bufs = A.init info.block_cnt (fun i -> A.map int_of_f8 bufs_float.(i)) in
   bufs;;
 
 let blit_plane jpg info bufs_idct buf =
@@ -409,7 +424,7 @@ let blit_plane jpg info bufs_idct buf =
             let (v, y8) = (yreal lsr 3, yreal land 7) in
             let (h, x8) = (xreal lsr 3, xreal land 7) in
             let m = v*hi.(comp_idx) + h in
-            float_of_int bufs_idct.(block_idx+m+comp_ns.(comp_idx)).(y8).(x8) in
+            float_of_int bufs_idct.(block_idx+m+comp_ns.(comp_idx)).(y8*8+x8) in
           let (yf, cbf, crf) = (get_val 0, get_val 1, get_val 2) in
           let rf = yf +. (c1402 *. crf) in
           let gf = yf -. (c034414 *. cbf) -. (c071414 *. crf) in
