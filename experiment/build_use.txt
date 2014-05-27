@@ -3,16 +3,22 @@ ocamlc -c Prelude.mli
 ocamlc -c Prelude.ml
 ocamlc -c Bitmap.mli
 ocamlc -c Bitmap.ml
-ocamlopt -c Prelude.mli
-ocamlopt -c Prelude.ml
-ocamlopt -c Bitmap.mli
-ocamlopt -c Bitmap.ml
+
+ocamlc -c JpegParser.ml
+ocamlc -o a.exe Prelude.cmo Bitmap.cmo JpegParser.cmo
+
+ocamlopt -strict-sequence -inline 5 -c Prelude.mli
+ocamlopt -strict-sequence -inline 5 -c Prelude.ml
+ocamlopt -strict-sequence -inline 5 -c Bitmap.mli
+ocamlopt -strict-sequence -inline 5 -c Bitmap.ml
+ocamlopt -strict-sequence -inline 5 -c JpegParser.ml
+ocamlopt -strict-sequence -inline 5 -o a.exe Prelude.cmx Bitmap.cmx JpegParser.cmx
 
 ocamlfind ocamlopt -pp "camlp4o -IC:/compilers/ocaml/lib/site-lib/bitstring bitstring.cma bitstring_persistent.cma pa_bitstring.cmo" -package unix -linkpkg -I C:/compilers/OCaml/lib/site-lib/bitstring bitstring.cmxa BS.ml -o BS.exe
 
 #load "Prelude.cmo";;
 #load "Bitmap.cmo";;
-
+#use "JpegParser.ml";;
 
 #load "Unix.cma";;
 #load "Bitstring_types.cmo";;
