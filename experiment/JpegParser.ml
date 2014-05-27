@@ -21,18 +21,18 @@ let fst3 (a, _, _) = a;;
 
 (* jpeg parse *)
 
-let inname = "teatime.jpg";; (* Sys.argv.(1);; *)
-let () = printf "reading file...\n";;
+let inname = Sys.argv.(1);;
+let () = printf "reading file...\n"; printf "%!";;
 let jpeg_raw =
   let fin = open_in_bin inname in
   let len = in_channel_length fin in
-  printf "String.create...\n";
+  printf "String.create...\n"; printf "%!";
   let data = String.create len in
-  printf "really_input...\n";
+  printf "really_input...\n"; printf "%!";
   really_input fin data 0 len;
   close_in fin;
   fun () -> data;;
-let () = printf "reading done\n";;
+let () = printf "reading done\n";  printf "%!";;
 
 exception Jpeg_format_error of string;;
 
@@ -97,11 +97,11 @@ let jpeg_parse_dht raw_data dht_idx =
       for i = 0 to (1 lsl (16-depth) - 1) do
         tbl.(code lsl (16-depth) + i) <- (depth, data)
       done;
-      code
-    in L.range 0 node_cnt
-    |> L.map2 (fun (depth, act) i ->
-       (depth, act, int_of_char raw_data.[idx+17 + i])) acts
-    |> L.fold_left set_code (-1);
+      code in
+    let _ = L.range 0 node_cnt
+         |> L.map2 (fun (depth, act) i ->
+            (depth, act, int_of_char raw_data.[idx+17 + i])) acts
+         |> L.fold_left set_code (-1) in
     (idx+17+node_cnt, { dht_type=table_type; dht_id=table_id; dht_tbl=tbl }) in
   let rec parse_dhts idx =
     if idx == size
@@ -252,10 +252,10 @@ let get_jpeg_info jpg =
   let comp_tbls = L.map3 (fun a b c -> (a, b, c)) comp_idxs huff_tbls quant_tbls
                |> A.of_list in
   let comp_size = L.sum comp_sizes in
-  let hmax = L.map (fun c -> c.sof_hi) jpg.sof.sof_comps |> L.maximum in
   let vmax = L.map (fun c -> c.sof_vi) jpg.sof.sof_comps |> L.maximum in
-  let hcomps = (jpg.sof.sof_height + 8*hmax - 1)/(8*hmax) in
-  let vcomps = (jpg.sof.sof_width  + 8*vmax - 1)/(8*vmax) in
+  let hmax = L.map (fun c -> c.sof_hi) jpg.sof.sof_comps |> L.maximum in
+  let vcomps = (jpg.sof.sof_height  + 8*vmax - 1)/(8*vmax) in
+  let hcomps = (jpg.sof.sof_width + 8*hmax - 1)/(8*hmax) in
   printf "height=%d,width=%d, vmax=%d,hmax=%d\n" jpg.sof.sof_height jpg.sof.sof_width vmax hmax;
   printf "hcomps=%d,vcomps=%d\n" hcomps vcomps;
   let mcu_cnt =
@@ -274,32 +274,34 @@ let get_jpeg_info jpg =
 
 let blit_plane jpg info bufs_idct =
   let buf = A.make_matrix jpg.sof.sof_height jpg.sof.sof_width (0,0,0) in
-  let hi_vi = L.map (fun c -> (c.sof_hi, c.sof_vi)) jpg.sof.sof_comps
-           |> A.of_list in
+  let hi = L.map (fun c -> c.sof_hi) jpg.sof.sof_comps |> A.of_list in
+  let vi = L.map (fun c -> c.sof_vi) jpg.sof.sof_comps |> A.of_list in
   let blit_mcu y0 x0 block_idx =
-    for y = 0 to info.comps_hmax*8-1 do
-      for x = 0 to info.comps_vmax*8-1 do
+    for y = 0 to info.comps_vmax*8-1 do
+      for x = 0 to info.comps_hmax*8-1 do
         if  y0+y<jpg.sof.sof_height && x0+x<jpg.sof.sof_width then begin
           let get_val comp_idx =
-            let yreal = y*fst hi_vi.(comp_idx)/info.comps_hmax in
-            let xreal = x*snd hi_vi.(comp_idx)/info.comps_vmax in
-            let (h, y8) = (yreal / 8, yreal mod 8) in
-            let (v, x8) = (xreal / 8, xreal mod 8) in
+            let yreal = y*vi.(comp_idx)/info.comps_vmax in
+            let xreal = x*hi.(comp_idx)/info.comps_hmax in
+            let (v, y8) = (yreal / 8, yreal mod 8) in
+            let (h, x8) = (xreal / 8, xreal mod 8) in
             let n = if comp_idx > 0
                       then fst3 info.comp_tbls.(comp_idx-1)
                       else 0 in
-            let m = h*snd hi_vi.(comp_idx) + v in
-(*            printf "  (%d,%d) -> (%d+%d+%d,%d,%d)\n" y x block_idx n m y8 x8; *)
+            let m = v*hi.(comp_idx) + h in
+(*            if y0 <= 100 && x0 <= 100 then
+              eprintf "  (%d,%d) -> (%d+%d+%d,%d,%d)\n" y x block_idx n m y8 x8;*)
             bufs_idct.(block_idx+m+n).(y8).(x8) in
-(*          printf "(%d,%d)\n" (y0+y) (x0+x); *)
+(*          if y0 <= 100 && x0 <= 100 then
+            eprintf "(%d,%d)\n" (y0+y) (x0+x);*)
           buf.(y0+y).(x0+x) <- (get_val 0, get_val 1, get_val 2)
         end
       done
     done in
-  for h = 0 to info.comps_h-1 do
-    for v = 0 to info.comps_v-1 do
-      blit_mcu (h*info.comps_hmax*8) (v*info.comps_vmax*8)
-               ((h*info.comps_v + v)*info.comp_size)
+  for v = 0 to info.comps_v-1 do
+    for h = 0 to info.comps_h-1 do
+      blit_mcu (v*info.comps_vmax*8) (h*info.comps_hmax*8)
+               ((v*info.comps_h + h)*info.comp_size)
     done
   done;
   buf;;
@@ -426,27 +428,27 @@ let rgb_conv jpg bufs_ycbcr bufs =
 (* TODO: parse jpeg using a loop (sequentially); remove jpeg_segmenting *)
 let test () =
   let raw_data = jpeg_raw () in
-  printf "reading...\n";
+  printf "reading...\n"; printf "%!";
   let jpg = parse_jpeg raw_data in
   let info = get_jpeg_info jpg in
-  printf "extract_scan...\n";
+  printf "extract_scan...\n"; printf "%!";
   let (next_idx, scan) = extract_scan raw_data jpg.sos.sos_data in
-  printf "extract_mcus...\n";
+  printf "extract_mcus...\n"; printf "%!";
   let (final_idx, bufs_flat) = extract_mcus scan info 0 in
-  printf "dequantize...\n";
+  printf "dequantize...\n"; printf "%!";
   dequantize info bufs_flat;
-  printf "unzigzag...\n";
+  printf "unzigzag...\n"; printf "%!";
   let bufs_8x8s = unzigzag info bufs_flat in
-  printf "idct...\n";
+  printf "idct...\n"; printf "%!";
   let bufs_idct = idct info bufs_8x8s in
-  printf "blit_plane...\n";
+  printf "blit_plane...\n"; printf "%!";
   let bufs_ycbcr = blit_plane jpg info bufs_idct in
   let bmp = Bitmap.make jpg.sof.sof_height jpg.sof.sof_width in
-  printf "rvb_conv...\n";
+  printf "rvb_conv...\n"; printf "%!";
   rgb_conv jpg bufs_ycbcr bmp.bits;
   let fout = open_out_bin "out.bmp" in
   Bitmap.output_bmp fout bmp;
   close_out fout;
-  bmp;;
+  { info with comp_tbls = A.init 0 (fun _ -> let rec loop () = loop () in loop ()) };;
 
 test ();;
