@@ -383,8 +383,10 @@ let idct info bufs_8x8s =
         int_of_f8 bufs_float.(i).(j).(k)))) in
   bufs;;
 
-let blit_plane jpg info bufs_idct =
-  let buf = A.make_matrix jpg.sof.sof_height jpg.sof.sof_width (0,0,0) in
+let blit_plane jpg info bufs_idct buf =
+  let c1402 = 1.402 in
+  let (c034414, c071414) = (0.34414, 0.71414) in
+  let c1772 = 1.772 in
   let hi = L.map (fun c -> c.sof_hi) jpg.sof.sof_comps |> A.of_list in
   let vi = L.map (fun c -> c.sof_vi) jpg.sof.sof_comps |> A.of_list in
   let blit_mcu y0 x0 block_idx =
@@ -400,8 +402,20 @@ let blit_plane jpg info bufs_idct =
                       then fst3 info.comp_tbls.(comp_idx-1)
                       else 0 in
             let m = v*hi.(comp_idx) + h in
-            bufs_idct.(block_idx+m+n).(y8).(x8) in
-          buf.(y0+y).(x0+x) <- (get_val 0, get_val 1, get_val 2)
+            float_of_int bufs_idct.(block_idx+m+n).(y8).(x8) in
+          let (yf, cbf, crf) = (get_val 0, get_val 1, get_val 2) in
+          let rf = yf +. (c1402 *. crf) in
+          let gf = yf -. (c034414 *. cbf) -. (c071414 *. crf) in
+          let bf = yf +. (c1772 *. cbf) in
+          let fix_shift f =
+            let m = 128 + int_of_float f in
+            if m < 0 then 0
+            else if m > 255 then 255
+            else m in
+          let (rc,gc,bc) = ( char_of_int (fix_shift rf)
+                           , char_of_int (fix_shift gf)
+                           , char_of_int (fix_shift bf)) in
+          buf.(jpg.sof.sof_height - 1 - y - y0).(x0+x) <- (rc, gc, bc)
         end
       done
     done in
@@ -410,28 +424,7 @@ let blit_plane jpg info bufs_idct =
       blit_mcu (v*info.comps_vmax*8) (h*info.comps_hmax*8)
                ((v*info.comps_h + h)*info.comp_size)
     done
-  done;
-  buf;;
-
-let rgb_conv jpg bufs_ycbcr bufs =
-  let c1402 = 1.402 in
-  let (c034414, c071414) = (0.34414, 0.71414) in
-  let c1772 = 1.772 in
-  flip A.iteri bufs_ycbcr (fun y row ->
-    flip A.iteri row (fun x (yi, cbi, cri) ->
-      let (yf,cbf,crf) = (float_of_int yi,float_of_int cbi,float_of_int cri) in
-      let rf = yf +. (c1402 *. crf) in
-      let gf = yf -. (c034414 *. cbf) -. (c071414 *. crf) in
-      let bf = yf +. (c1772 *. cbf) in
-      let fix_shift f =
-        let m = 128 + int_of_float f in
-        if m < 0 then 0
-        else if m > 255 then 255
-        else m in
-      let (rc,gc,bc) = ( char_of_int (fix_shift rf)
-                       , char_of_int (fix_shift gf)
-                       , char_of_int (fix_shift bf)) in
-      bufs.(jpg.sof.sof_height - 1 - y).(x) <- (rc, gc, bc)));;
+  done
 
 (* TODO: parse jpeg using a loop (sequentially); remove jpeg_segmenting *)
 let test () =
@@ -449,11 +442,9 @@ let test () =
   let bufs_8x8s = unzigzag info bufs_flat in
   printf "[+] idct...\n"; printf "%!";
   let bufs_idct = idct info bufs_8x8s in
-  printf "[+] ycbcr blit_plane...\n"; printf "%!";
-  let bufs_ycbcr = blit_plane jpg info bufs_idct in
+  printf "[+] blit_rgb_conv...\n"; printf "%!";
   let bmp = Bitmap.make jpg.sof.sof_height jpg.sof.sof_width in
-  printf "[+] rgb_conv...\n"; printf "%!";
-  rgb_conv jpg bufs_ycbcr bmp.bits;
+  blit_plane jpg info bufs_idct bmp.bits;
   printf "[+] Outputing res...\n"; printf "%!";
   let fout = open_out_bin "out.bmp" in
   Bitmap.output_bmp fout bmp;
