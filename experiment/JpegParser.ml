@@ -366,6 +366,13 @@ let unzigzag info bufs_flat =
       bufs.(block_idx).(y).(x) <- block.(idx)));
   bufs;;
 
+let ( +: ) a b = a + b;;
+let ( -: ) a b = a - b;;
+let ( *: ) a b = (a * b) asr 8;;
+let f8_of_float f = int_of_float (f *. 256.0 +. 0.5);;
+let f8_of_int n = n lsl 8;;
+let int_of_f8 n = n asr 8;;
+
 let idct info bufs_8x8s =
   let idct1_vecs =
     let pi = acos (-1.0) in
@@ -376,45 +383,54 @@ let idct info bufs_8x8s =
                          f n k *. normalize_factor)) in
     let fix_x0_coef (_::xs) = sqrt (1.0 /. 2.0) *. normalize_factor::xs in
        L.map fix_x0_coef (cos_vecs (fun n k -> angle k n))
+    |> L.map (L.map f8_of_float)
     |> L.map A.of_list
     |> A.of_list in
-  let idct vec =
-    let dot u v =
+  let idct =
+    let buf = A.make 8 0 in
+    let dot u idx v =
       let rec sumf i acc =
         if i == 8
-          then acc
-          else sumf (i+1) (acc +. u.(i) *. v.(i)) in
-      sumf 0 0.0 in
-    A.map (dot vec) idct1_vecs in
+          then buf.(idx) <- acc
+          else sumf (i+1) (acc +: (u.(i) *: v.(i))) in
+      sumf 0 0 in
+    fun vec ->
+      A.iteri (fun i _ -> buf.(i) <- 0) buf;
+      A.iteri (dot vec) idct1_vecs;
+      A.blit buf 0 vec 0 8 in
   let bufs_float = A.init info.block_cnt (fun i ->
     A.init 8 (fun j ->
       A.init 8 (fun k ->
-        float_of_int bufs_8x8s.(i).(k).(j)))) in
+        f8_of_int bufs_8x8s.(i).(k).(j)))) in
   flip A.iter bufs_float (fun block ->
-    A.iteri (fun i col -> block.(i) <- idct col) block);
+    A.iter (fun col -> idct col) block);
   A.iter A.transpose bufs_float;
   flip A.iter bufs_float (fun block ->
-    A.iteri (fun i row -> block.(i) <- idct row) block);
+    A.iter (fun row -> idct row) block);
   let bufs = A.init info.block_cnt (fun i ->
     A.init 8 (fun j ->
       A.init 8 (fun k ->
-        int_of_float (bufs_float.(i).(j).(k) +. 0.5)))) in
+        int_of_f8 bufs_float.(i).(j).(k)))) in
   bufs;;
 
 let rgb_conv jpg bufs_ycbcr bufs =
+  let c1402 = 1.402 in
+  let (c034414, c071414) = (0.34414, 0.71414) in
+  let c1772 = 1.772 in
   flip A.iteri bufs_ycbcr (fun y row ->
     flip A.iteri row (fun x (yi, cbi, cri) ->
-      let [yf; cbf; crf] = L.map float_of_int [yi; cbi; cri] in
-      let rf = yf +. 1.402 *. crf in
-      let gf = yf -. 0.34414 *. cbf -. 0.71414 *. crf in
-      let bf = yf +. 1.772 *. cbf in
+      let (yf,cbf,crf) = (float_of_int yi,float_of_int cbi,float_of_int cri) in
+      let rf = yf +. (c1402 *. crf) in
+      let gf = yf -. (c034414 *. cbf) -. (c071414 *. crf) in
+      let bf = yf +. (c1772 *. cbf) in
       let fix_shift f =
         let m = 128 + int_of_float f in
         if m < 0 then 0
         else if m > 255 then 255
         else m in
-      let [rc; gc; bc] = L.map fix_shift [rf; gf; bf]
-                      |> L.map char_of_int in
+      let (rc,gc,bc) = ( char_of_int (fix_shift rf)
+                       , char_of_int (fix_shift gf)
+                       , char_of_int (fix_shift bf)) in
       bufs.(jpg.sof.sof_height - 1 - y).(x) <- (rc, gc, bc)));;
 
 (* TODO: parse jpeg using a loop (sequentially); remove jpeg_segmenting *)
@@ -438,6 +454,7 @@ let test () =
   let bmp = Bitmap.make jpg.sof.sof_height jpg.sof.sof_width in
   printf "[+] rgb_conv...\n"; printf "%!";
   rgb_conv jpg bufs_ycbcr bmp.bits;
+  printf "[+] Outputing res...\n"; printf "%!";
   let fout = open_out_bin "out.bmp" in
   Bitmap.output_bmp fout bmp;
   close_out fout;;
