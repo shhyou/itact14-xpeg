@@ -22,14 +22,14 @@ let fst3 (a, _, _) = a;;
 (* jpeg parse *)
 
 let inname = Sys.argv.(1);;
-let () = printf "[+] reading file...\n"; printf "%!";;
+let () = printf "[+] reading file...\n%!";;
 
 let jpeg_raw =
   let fin = open_in_bin inname in
   let len = in_channel_length fin in
-  printf "[+] String.create...\n"; printf "%!";
+  printf "[+] String.create...\n%!";
   let data = String.create len in
-  printf "[+] really_input...\n"; printf "%!";
+  printf "[+] really_input...\n%!";
   really_input fin data 0 len;
   close_in fin;
   fun () -> data;;
@@ -365,18 +365,22 @@ let idct info bufs_8x8s =
           else sumf (i+1) (acc +: (u.(i) *: v.(i))) in
       sumf 0 0 in
     fun vec ->
-      A.iteri (fun i _ -> buf.(i) <- 0) buf;
       A.iteri (dot vec) idct1_vecs;
       A.blit buf 0 vec 0 8 in
+  printf "    buf init\n%!";
   let bufs_float = A.init info.block_cnt (fun i ->
     A.init 8 (fun j ->
       A.init 8 (fun k ->
         f8_of_int bufs_8x8s.(i).(k).(j)))) in
+  printf "    dot\n%!";
   flip A.iter bufs_float (fun block ->
     A.iter (fun col -> idct col) block);
+  printf "    transpose\n%!";
   A.iter A.transpose bufs_float;
+  printf "    dot\n%!";
   flip A.iter bufs_float (fun block ->
     A.iter (fun row -> idct row) block);
+  printf "    blit back\n%!";
   let bufs = A.init info.block_cnt (fun i ->
     A.init 8 (fun j ->
       A.init 8 (fun k ->
@@ -387,22 +391,25 @@ let blit_plane jpg info bufs_idct buf =
   let c1402 = 1.402 in
   let (c034414, c071414) = (0.34414, 0.71414) in
   let c1772 = 1.772 in
+  let rec lg2 = function
+      1 -> 0
+    | n -> 1 + lg2 (n / 2) in
   let hi = L.map (fun c -> c.sof_hi) jpg.sof.sof_comps |> A.of_list in
   let vi = L.map (fun c -> c.sof_vi) jpg.sof.sof_comps |> A.of_list in
+  let div_hi = A.map (fun hi -> lg2 (info.comps_hmax/hi)) hi in
+  let div_vi = A.map (fun vi -> lg2 (info.comps_vmax/vi)) vi in
+  let comp_ns = (0::L.map fst3 (A.to_list info.comp_tbls)) |> A.of_list in
   let blit_mcu y0 x0 block_idx =
     for y = 0 to info.comps_vmax*8-1 do
       for x = 0 to info.comps_hmax*8-1 do
-        if  y0+y<jpg.sof.sof_height && x0+x<jpg.sof.sof_width then begin
+        if y0+y<jpg.sof.sof_height && x0+x<jpg.sof.sof_width then begin
           let get_val comp_idx =
-            let yreal = y*vi.(comp_idx)/info.comps_vmax in
-            let xreal = x*hi.(comp_idx)/info.comps_hmax in
-            let (v, y8) = (yreal / 8, yreal mod 8) in
-            let (h, x8) = (xreal / 8, xreal mod 8) in
-            let n = if comp_idx > 0
-                      then fst3 info.comp_tbls.(comp_idx-1)
-                      else 0 in
+            let yreal = y lsr div_vi.(comp_idx) in
+            let xreal = x lsr div_hi.(comp_idx) in
+            let (v, y8) = (yreal lsr 3, yreal land 7) in
+            let (h, x8) = (xreal lsr 3, xreal land 7) in
             let m = v*hi.(comp_idx) + h in
-            float_of_int bufs_idct.(block_idx+m+n).(y8).(x8) in
+            float_of_int bufs_idct.(block_idx+m+comp_ns.(comp_idx)).(y8).(x8) in
           let (yf, cbf, crf) = (get_val 0, get_val 1, get_val 2) in
           let rf = yf +. (c1402 *. crf) in
           let gf = yf -. (c034414 *. cbf) -. (c071414 *. crf) in
@@ -429,23 +436,23 @@ let blit_plane jpg info bufs_idct buf =
 (* TODO: parse jpeg using a loop (sequentially); remove jpeg_segmenting *)
 let test () =
   let raw_data = jpeg_raw () in
-  printf "[+] reading...\n"; printf "%!";
+  printf "[+] reading...\n%!";
   let jpg = parse_jpeg raw_data in
   let info = get_jpeg_info jpg in
-  printf "[+] extract_scan...\n"; printf "%!";
+  printf "[+] extract_scan...\n%!";
   let (next_idx, scan) = extract_scan raw_data jpg.sos.sos_data in
-  printf "[+] extract_mcus...\n"; printf "%!";
+  printf "[+] extract_mcus...\n%!";
   let (final_idx, bufs_flat) = extract_mcus scan info 0 in
-  printf "[+] dequantize...\n"; printf "%!";
+  printf "[+] dequantize...\n%!";
   dequantize info bufs_flat;
-  printf "[+] unzigzag...\n"; printf "%!";
+  printf "[+] unzigzag...\n%!";
   let bufs_8x8s = unzigzag info bufs_flat in
-  printf "[+] idct...\n"; printf "%!";
+  printf "[+] idct...\n%!";
   let bufs_idct = idct info bufs_8x8s in
-  printf "[+] blit_rgb_conv...\n"; printf "%!";
+  printf "[+] blit_rgb_conv...\n%!";
   let bmp = Bitmap.make jpg.sof.sof_height jpg.sof.sof_width in
   blit_plane jpg info bufs_idct bmp.bits;
-  printf "[+] Outputing res...\n"; printf "%!";
+  printf "[+] Outputing res...\n%!";
   let fout = open_out_bin "out.bmp" in
   Bitmap.output_bmp fout bmp;
   close_out fout;;
