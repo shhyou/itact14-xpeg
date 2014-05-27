@@ -270,36 +270,6 @@ let get_jpeg_info jpg =
   ; mcu_cnt = mcu_cnt
   ; block_cnt = block_cnt };;
 
-let blit_plane jpg info bufs_idct =
-  let buf = A.make_matrix jpg.sof.sof_height jpg.sof.sof_width (0,0,0) in
-  let hi = L.map (fun c -> c.sof_hi) jpg.sof.sof_comps |> A.of_list in
-  let vi = L.map (fun c -> c.sof_vi) jpg.sof.sof_comps |> A.of_list in
-  let blit_mcu y0 x0 block_idx =
-    for y = 0 to info.comps_vmax*8-1 do
-      for x = 0 to info.comps_hmax*8-1 do
-        if  y0+y<jpg.sof.sof_height && x0+x<jpg.sof.sof_width then begin
-          let get_val comp_idx =
-            let yreal = y*vi.(comp_idx)/info.comps_vmax in
-            let xreal = x*hi.(comp_idx)/info.comps_hmax in
-            let (v, y8) = (yreal / 8, yreal mod 8) in
-            let (h, x8) = (xreal / 8, xreal mod 8) in
-            let n = if comp_idx > 0
-                      then fst3 info.comp_tbls.(comp_idx-1)
-                      else 0 in
-            let m = v*hi.(comp_idx) + h in
-            bufs_idct.(block_idx+m+n).(y8).(x8) in
-          buf.(y0+y).(x0+x) <- (get_val 0, get_val 1, get_val 2)
-        end
-      done
-    done in
-  for v = 0 to info.comps_v-1 do
-    for h = 0 to info.comps_h-1 do
-      blit_mcu (v*info.comps_vmax*8) (h*info.comps_hmax*8)
-               ((v*info.comps_h + h)*info.comp_size)
-    done
-  done;
-  buf;;
-
 let extract_mcus scan info start_idx =
   let bufs = A.make_matrix info.block_cnt 64 0 in
   printf "comp_size=%d,mcu_cnt=%d\n" info.comp_size info.mcu_cnt;
@@ -412,6 +382,36 @@ let idct info bufs_8x8s =
       A.init 8 (fun k ->
         int_of_f8 bufs_float.(i).(j).(k)))) in
   bufs;;
+
+let blit_plane jpg info bufs_idct =
+  let buf = A.make_matrix jpg.sof.sof_height jpg.sof.sof_width (0,0,0) in
+  let hi = L.map (fun c -> c.sof_hi) jpg.sof.sof_comps |> A.of_list in
+  let vi = L.map (fun c -> c.sof_vi) jpg.sof.sof_comps |> A.of_list in
+  let blit_mcu y0 x0 block_idx =
+    for y = 0 to info.comps_vmax*8-1 do
+      for x = 0 to info.comps_hmax*8-1 do
+        if  y0+y<jpg.sof.sof_height && x0+x<jpg.sof.sof_width then begin
+          let get_val comp_idx =
+            let yreal = y*vi.(comp_idx)/info.comps_vmax in
+            let xreal = x*hi.(comp_idx)/info.comps_hmax in
+            let (v, y8) = (yreal / 8, yreal mod 8) in
+            let (h, x8) = (xreal / 8, xreal mod 8) in
+            let n = if comp_idx > 0
+                      then fst3 info.comp_tbls.(comp_idx-1)
+                      else 0 in
+            let m = v*hi.(comp_idx) + h in
+            bufs_idct.(block_idx+m+n).(y8).(x8) in
+          buf.(y0+y).(x0+x) <- (get_val 0, get_val 1, get_val 2)
+        end
+      done
+    done in
+  for v = 0 to info.comps_v-1 do
+    for h = 0 to info.comps_h-1 do
+      blit_mcu (v*info.comps_vmax*8) (h*info.comps_hmax*8)
+               ((v*info.comps_h + h)*info.comp_size)
+    done
+  done;
+  buf;;
 
 let rgb_conv jpg bufs_ycbcr bufs =
   let c1402 = 1.402 in
