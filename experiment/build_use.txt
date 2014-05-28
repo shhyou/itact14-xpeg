@@ -4,6 +4,9 @@ ocamlc -c Prelude.ml
 ocamlc -c Bitmap.mli
 ocamlc -c Bitmap.ml
 
+ocamlc -c BmpParser.ml
+ocamlc -o a.exe Prelude.cmo Bitmap.cmo BmpParser.cmo
+
 ocamlc -c JpegParser.ml
 ocamlc -o a.exe Prelude.cmo Bitmap.cmo JpegParser.cmo
 
