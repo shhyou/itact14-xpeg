@@ -90,7 +90,7 @@ let input_bmp ci =
   let bf_hdr = input_bmp_file_hdr ci in
   let bi_hdr = input_bmp_info_hdr ci in
   let row_size = (bi_hdr.width * 24 + 31) / 32 * 4 in
-  let bits = A.make_matrix bi_hdr.width bi_hdr.height ('\x00','\x00','\x00') in
+  let bits = A.make_matrix bi_hdr.height bi_hdr.width ('\x00','\x00','\x00') in
   flip A.iteri bits (fun y arr ->
     seek_in ci (bf_hdr.offset + y * row_size);
     flip A.iteri arr (fun x _ ->
