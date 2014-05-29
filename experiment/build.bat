@@ -17,3 +17,4 @@ ocamlopt -strict-sequence -unsafe -ffast-math -o BmpParser.exe Prelude.cmx Bitma
 D:\code\clock jpegparser teatime.jpg
 D:\code\clock bmpparser  out.bmp
 :bye
+@rem bmpparser gig-sn01.bmp gig-sn01.bmp_out.jpg && bmpparser gig-sn08.bmp gig-sn08.bmp_out.jpg && bmpparser monalisa.bmp monalisa.bmp_out.jpg && bmpparser teatime.bmp teatime.bmp_out.jpg
