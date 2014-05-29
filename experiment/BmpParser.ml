@@ -395,29 +395,33 @@ let encode_mcus mcu_cnt info bmp_dct buf_out =
   let ac_tbls = A.map snd info.comp_inv_tbls in
   let dc_tbls = A.map fst info.comp_inv_tbls in
   let rec enc_mcu buf_cur block_idx comp_idx =
-    let rec enc_acs buf idx zero_cnt _ac_idx =
-      match _ac_idx with
-        64 ->
-          if zero_cnt <> 0
+    let rec get_ac_cnt idx = function
+        1 -> 1
+      | ac_nxt_idx when bmp_dct.(idx).(ac_nxt_idx-1) <> 0 -> ac_nxt_idx
+      | ac_nxt_idx -> get_ac_cnt idx (ac_nxt_idx-1) in
+    let rec enc_acs buf idx ac_cnt zero_cnt = function
+        ac_idx when ac_idx == ac_cnt ->
+          if ac_cnt <> 64
             then set_buf ac_tbls.(comp_idx).(0) buf
             else buf
       | ac_idx when bmp_dct.(idx).(ac_idx) == 0 ->
         if zero_cnt == 15
           then let new_buf = set_buf ac_tbls.(comp_idx).(0xf0) buf in
-               enc_acs new_buf idx 0 (ac_idx+1)
-          else enc_acs buf idx (zero_cnt+1) (ac_idx+1)
+               enc_acs new_buf idx ac_cnt 0 (ac_idx+1)
+          else enc_acs buf idx ac_cnt (zero_cnt+1) (ac_idx+1)
       | ac_idx ->
         let (len, bits) as s = encode_s bmp_dct.(idx).(ac_idx) in
         let new_buf = buf |> set_buf ac_tbls.(comp_idx).((zero_cnt lsl 4) lor len)
                           |> set_buf s in
-        enc_acs new_buf idx 0 (ac_idx+1) in
+        enc_acs new_buf idx ac_cnt 0 (ac_idx+1) in
     if comp_idx == 3
       then buf_cur
       else let block = bmp_dct.(block_idx+comp_idx) in
            let (len, bits) as s = encode_s block.(0) in
+           let ac_cnt = get_ac_cnt (block_idx+comp_idx) 64 in
            let new_buf0 = set_buf dc_tbls.(comp_idx).(len) buf_cur in
            let new_buf1 = if len==0 then new_buf0 else set_buf s new_buf0 in
-           let new_buf2 = enc_acs new_buf1 (block_idx+comp_idx) 0 1 in
+           let new_buf2 = enc_acs new_buf1 (block_idx+comp_idx) ac_cnt 0 1 in
            enc_mcu new_buf2 block_idx (comp_idx+1) in
   let rec enc_loop block_idx buf =
     if block_idx == mcu_cnt*3
