@@ -74,7 +74,6 @@ let jpeg_parse_dht raw_data dht_idx =
     let tree_sizes = flip L.map (L.range 0 16) (fun i ->
                      int_of_char raw_data.[idx+1 + i]) in
     let node_cnt = L.sum tree_sizes in
-(*    printf "node_cnt=%d\n%!" node_cnt;*)
     let acts =
       let rec create_actions = function
           (_, shift, []) -> []
@@ -235,228 +234,6 @@ let get_jpeg_info jpg =
   ; mcu_cnt = mcu_cnt
   ; block_cnt = block_cnt };;
 
-let ( +: ) a b = a + b;;
-let ( -: ) a b = a - b;;
-let ( *: ) a b = (a * b) / 256;;
-let f8_of_float f = int_of_float (f *. 256.0 +. 0.5);;
-let f8_of_int n = n lsl 8;;
-let int_of_f8 n = n / 256;;
-
-(**************************************************************************)
-
-let fst3 (a, _, _) = a;;
-
-let extract_8x8 raw_data (dc_tbl, ac_tbl) start_idx buf =
-  let u16_of_bits idx =
-    let (arr_idx, bit_idx) = (idx lsr 3, idx land 0x7) in
-    (int_of_char raw_data.[arr_idx]  lsl 16 +
-     int_of_char raw_data.[arr_idx+1] lsl 8 +
-     int_of_char raw_data.[arr_idx+2]) lsl (7 + bit_idx) in
-  let get_signed_int bits = function
-      0 -> 0
-    | len -> let msk = lnot (bits asr 30) in
-             ((1 lsl len) lxor msk) + (2 land msk) + (bits asr (31-len)) in
-  let (dc_hufflen, dc_huff) = dc_tbl.(u16_of_bits start_idx lsr 15) in
-  buf.(0) <- get_signed_int (u16_of_bits (start_idx+dc_hufflen)) dc_huff; (*diff*)
-  let rec extract_ac idx = function
-      64 -> idx
-    | n -> match ac_tbl.(u16_of_bits idx lsr 15) with
-              (ac_hufflen, 0) -> idx + ac_hufflen
-            | (ac_hufflen, ac_huff) ->
-              let (rrrr, ssss) = (ac_huff lsr 4, ac_huff land 0xf) in
-              buf.(n+rrrr) <- get_signed_int (u16_of_bits (idx+ac_hufflen)) ssss;
-(*              printf "    ac: %d -> %d\n" (n+rrrr) buf.(n+rrrr); *)
-              extract_ac (idx+ac_hufflen+ssss) (n+rrrr+1) in
-  extract_ac (start_idx+dc_hufflen+dc_huff) 1;;
-
-
-let extract_mcus scan info start_idx =
-  let bufs = A.make_matrix info.block_cnt 64 0 in
-  printf "comp_size=%d,mcu_cnt=%d\n" info.comp_size info.mcu_cnt;
-  printf "bufs length=%d\n" (A.length bufs);
-  let rec ext_loop block_idx bit_idx =
-    let rec ext_mcu (n, bit_idx) (comp_cnt, huff_tbl, quant_tbl) =
-      if n == comp_cnt
-        then (n, bit_idx)
-        else let next_idx = extract_8x8 scan huff_tbl bit_idx bufs.(block_idx+n) in
-             ext_mcu (n+1, next_idx) (comp_cnt, huff_tbl, quant_tbl) in
-    if block_idx == info.block_cnt
-      then bit_idx
-      else let (_, next_idx) = A.fold_left ext_mcu (0, bit_idx) info.comp_tbls in
-           ext_loop (block_idx+info.comp_size) next_idx in
-  let next_idx = ext_loop 0 start_idx in
-  let fix_diff_dc comp_idx =
-    let begin_ = if comp_idx == 0 then 0 else fst3 info.comp_tbls.(comp_idx-1) in
-    let end_ = fst3 info.comp_tbls.(comp_idx) in
-    let rec fix_loop prev_dc block_idx =
-      if block_idx < info.block_cnt then begin
-        let rec set_acc n dc =
-          if n == end_
-            then dc
-            else begin
-              bufs.(block_idx+n).(0) <- bufs.(block_idx+n).(0) + dc;
-              set_acc (n+1) bufs.(block_idx+n).(0)
-            end in
-        let next_dc = set_acc begin_ prev_dc in
-        fix_loop next_dc (block_idx+info.comp_size)
-      end in
-    fix_loop 0 0 in
-  for idx = 0 to 2 do
-    fix_diff_dc idx;
-  done;
-  (next_idx, bufs);;
-
-let dequantize info bufs =
-  let rec deq_loop block_idx =
-    if block_idx == info.block_cnt
-      then block_idx
-      else info.comp_tbls
-        |> flip A.fold_left block_idx (fun n (comp_cnt, _, quant_tbl) ->
-           let rec mul_acc m =
-             if m < block_idx+comp_cnt then begin
-               A.iteri (fun i q -> bufs.(m).(i) <- bufs.(m).(i)*q) quant_tbl;
-               mul_acc (m+1)
-             end
-           in mul_acc n; block_idx+comp_cnt)
-        |> deq_loop
-  in let _ = deq_loop 0
-  in ();;
-
-let unzigzag info bufs_flat =
-  let zigzag_order =
-    let skew_diag y0 x0 =
-      (if (y0+x0) mod 2 == 0 then (fun x -> x) else L.rev)
-      (L.map (fun i -> (y0-i, x0+i)) (L.range 0 (min y0 (7-x0) + 1))) in
-       L.map2 skew_diag (L.range 0 8@[7;7;7;7;7;7;7]) ([0;0;0;0;0;0;0]@L.range 0 8)
-    |> L.concat
-    |> A.of_list in
-  let bufs = A.make_matrix info.block_cnt 64 0 in
-  flip A.iteri bufs_flat (fun block_idx block ->
-    flip A.iteri zigzag_order (fun idx (y, x) ->
-      bufs.(block_idx).(y*8+x) <- block.(idx)));
-  bufs;;
-
-let idct info bufs_8x8s =
-  let transpose block =
-    for i = 0 to 7 do
-      for j = i+1 to 7 do
-        let t = block.(i*8 + j) in
-        block.(i*8 + j) <- block.(j*8 + i);
-        block.(j*8 + i) <- t
-      done
-    done in
-  let idct =
-    (* http://www.reznik.org/papers/SPIE07_MPEG-C_IDCT.pdf Fig. 2, butterfly
-     a (a0, a4, a2, a6, a7, a3, a5, a1)
-     b (a0, a4, a2, a6, a1-a7, γa3, γa5, a1+a7)
-     c (a0+a4, a0-a4, αa2 - βa6, αa6 + βa2, b7+b5, b1-b3, b7-b5, b1+b3)
-     d (c0+c6, c4+c2, c4-c2, c0-c6, ηc7 - θc1, δc3 - εc5, δc5 + εc3, ηc1 + θc7)
-     e (d0+d1, d4+d5, d2+d3, d6+d7, d6-d7, d2-d3, d4-d5, d0-d1)
-    *)
-    let pi = acos (-1.0) in
-    let r = f8_of_float (sqrt (2.0)) in
-    let a = f8_of_float (sqrt (2.0) *. cos (3.0 *. pi /. 8.0)) in
-    let b = f8_of_float (sqrt (2.0) *. sin (3.0 *. pi /. 8.0)) in
-    let d = f8_of_float (cos (pi /. 16.0)) in
-    let e = f8_of_float (sin (pi /. 16.0)) in
-    let n = f8_of_float (cos (3.0 *. pi /. 16.0)) in
-    let t = f8_of_float (sin (3.0 *. pi /. 16.0)) in
-    fun block idx ->
-      let (b7, b1) = ( block.(idx+1) -: block.(idx+7)
-                     , block.(idx+1) +: block.(idx+7) ) in
-      let (b3, b5) = (r *: block.(idx+3), r *: block.(idx+5)) in
-      let (c0, c4) = (block.(idx) +: block.(idx+4), block.(idx) -: block.(idx+4)) in
-      let (c2, c6) = ( a *: block.(idx+2) -: b *: block.(idx+6)
-                     , a *: block.(idx+6) +: b *: block.(idx+2) ) in
-      let (c7, c3, c5, c1) = (b7+:b5, b1-:b3, b7-:b5, b1+:b3) in
-      let (d0, d4, d2, d6) = (c0+:c6, c4+:c2, c4-:c2, c0-:c6) in
-      let (d7, d3) = (n*:c7 -: t*:c1, d*:c3 -: e*:c5) in
-      let (d5, d1) = (d*:c5 +: e*:c3, n*:c1 +: t*:c7) in
-      block.(idx) <- d0 +: d1;
-      block.(idx+1) <- d4 +: d5;
-      block.(idx+2) <- d2 +: d3;
-      block.(idx+3) <- d6 +: d7;
-      block.(idx+4) <- d6 -: d7;
-      block.(idx+5) <- d2 -: d3;
-      block.(idx+6) <- d4 -: d5;
-      block.(idx+7) <- d0 -: d1 in
-  printf "    buf init\n%!";
-  let bufs_f8s = A.init info.block_cnt (fun i ->
-    let arr = A.map f8_of_int bufs_8x8s.(i) in
-    transpose arr;
-    arr) in
-  printf "    dot\n%!";
-  flip A.iter bufs_f8s (fun block ->
-    for i = 0 to 7 do
-      idct block (i*8) 
-    done);
-  printf "    transpose\n%!";
-  A.iter transpose bufs_f8s;
-  printf "    dot\n%!";
-  flip A.iter bufs_f8s (fun block ->
-    for i = 0 to 7 do
-      idct block (i*8) 
-    done);
-  printf "    blit back\n%!";
-  let bufs = A.init info.block_cnt (fun i -> A.map (fun f -> int_of_f8 f / 8)
-                                                   bufs_f8s.(i)) in
-  bufs;;
-
-let blit_plane jpg info bufs_idct buf =
-  let c1402 = 1.402 in
-  let (c034414, c071414) = (0.34414, 0.71414) in
-  let c1772 = 1.772 in
-  let rec lg2 = function
-      1 -> 0
-    | n -> 1 + lg2 (n / 2) in
-  let hi = L.map (fun c -> c.sof_hi) jpg.sof.sof_comps |> A.of_list in
-  let vi = L.map (fun c -> c.sof_vi) jpg.sof.sof_comps |> A.of_list in
-  let div_hi = A.map (fun hi -> lg2 (info.comps_hmax/hi)) hi in
-  let div_vi = A.map (fun vi -> lg2 (info.comps_vmax/vi)) vi in
-  let comp_ns = (0::L.map fst3 (A.to_list info.comp_tbls)) |> A.of_list in
-  let blit_mcu y0 x0 block_idx =
-    for y = 0 to info.comps_vmax*8-1 do
-      for x = 0 to info.comps_hmax*8-1 do
-        if y0+y<jpg.sof.sof_height && x0+x<jpg.sof.sof_width then begin
-          let get_val comp_idx =
-            let yreal = y lsr div_vi.(comp_idx) in
-            let xreal = x lsr div_hi.(comp_idx) in
-            let (v, y8) = (yreal lsr 3, yreal land 7) in
-            let (h, x8) = (xreal lsr 3, xreal land 7) in
-            let m = v*hi.(comp_idx) + h in
-            float_of_int bufs_idct.(block_idx+m+comp_ns.(comp_idx)).(y8*8+x8) in
-          let (yf, cbf, crf) = (get_val 0, get_val 1, get_val 2) in
-(*          if y==0 then printf "(%d,%d): (%f,%f,%f)\n%!" (y0+y) (x0+x) yf cbf crf;*)
-          let rf = yf +. (c1402 *. crf) in
-          let gf = yf -. (c034414 *. cbf) -. (c071414 *. crf) in
-          let bf = yf +. (c1772 *. cbf) in
-          let fix_shift f =
-            let m = 128 + int_of_float f in
-            if m < 0 then 0
-            else if m > 255 then 255
-            else m in
-          let (rc,gc,bc) = ( char_of_int (fix_shift rf)
-                           , char_of_int (fix_shift gf)
-                           , char_of_int (fix_shift bf)) in
-          buf.(jpg.sof.sof_height - 1 - y - y0).(x0+x) <- (rc, gc, bc)
-        end
-      done
-    done in
-  for v = 0 to info.comps_v-1 do
-    for h = 0 to info.comps_h-1 do
-      blit_mcu (v*info.comps_vmax*8) (h*info.comps_hmax*8)
-               ((v*info.comps_h + h)*info.comp_size)
-    done
-  done
-
-
-
-
-
-
-
-(**************************************************************************)
-
 let quantize info bufs =
   let rec qnt_loop block_idx =
     if block_idx == info.block_cnt
@@ -487,6 +264,13 @@ let zigzag info bufs_flat =
       bufs.(block_idx).(idx) <- block.(y*8+x)));
   bufs;;
 
+let ( +: ) a b = a + b;;
+let ( -: ) a b = a - b;;
+let ( *: ) a b = (a * b) / 256;;
+let f8_of_float f = int_of_float (f *. 256.0 +. 0.5);;
+let f8_of_int n = n lsl 8;;
+let int_of_f8 n = n / 256;;
+
 let bmp_flatten (bmp : Bitmap.bmp) =
   let height = (bmp.info.height + 7)/8 in
   let width  = (bmp.info.width  + 7)/8 in
@@ -501,14 +285,12 @@ let bmp_flatten (bmp : Bitmap.bmp) =
             let ystar = bmp.info.height-1-(if y0+y >= bmp.info.height then 0 else y0+y) in
             let xstar = if x0+x >= bmp.info.width  then bmp.info.width -1 else x0+x in
             let (r, g, b) = bmp.bits.(ystar).(xstar) in
-(*            if y==7 then printf"(%d,%d) -> " ystar xstar; *)
             ( float_of_int (int_of_char r - 128)
             , float_of_int (int_of_char g - 128)
             , float_of_int (int_of_char b - 128) ) in
-          buf.(block_idx).(y*8+x) <- 0.299*.rf +. 0.587*.gf +. 0.114*.bf |> int_of_float;
-          buf.(block_idx+1).(y*8+x) <- -0.168736*.rf -. 0.331264*.gf +. 0.5*.bf |> int_of_float;
-          buf.(block_idx+2).(y*8+x) <- 0.5*.rf -. 0.418688*.gf -. 0.081312*.bf |> int_of_float;
-(*          if y==7 then printf "(%f,%f,%f)\n%!" buf.(block_idx).(y*8+x) buf.(block_idx+1).(y*8+x) buf.(block_idx+2).(y*8+x) *)
+          buf.(block_idx).(y*8+x) <- 0.299*.rf +. 0.587*.gf +. 0.114*.bf |> f8_of_float;
+          buf.(block_idx+1).(y*8+x) <- -0.168736*.rf -. 0.331264*.gf +. 0.5*.bf |> f8_of_float;
+          buf.(block_idx+2).(y*8+x) <- 0.5*.rf -. 0.418688*.gf -. 0.081312*.bf |> f8_of_float;
         done
       done
     done
@@ -545,9 +327,8 @@ let dct bufs_flat =
     A.iteri dot dct_vecs;
     A.blit buf 0 block base_idx 8 in
   printf "    buf init\n%!";
-  let bufs_f8s = A.init (A.length bufs_flat) (fun block_idx ->
-    let block = A.map f8_of_int bufs_flat.(block_idx)
-    in
+  let bufs_f8s = flip A.map bufs_flat (fun block_flat ->
+    let block = A.copy block_flat in
     transpose block;
     block) in
   printf "    dot\n%!";
@@ -568,7 +349,6 @@ let dct bufs_flat =
 
 let fix_dc_diff mcu_cnt bufs =
   let rec subtract dc0 dc1 dc2 idx =
-(*    printf "%d\n%!" idx; *)
     if idx == mcu_cnt*3
       then ()
       else begin
@@ -589,7 +369,6 @@ type jpeg_buf = {
 
 let make_buf len = { jpeg_buf_idx = 0; jpeg_buf = String.make len '\x00' };;
 let set_buf (len, bit16) jpg_buf =
-(*  printf "set_buf %d\n%!" jpg_buf.jpeg_buf_idx; *)
   if len==0 && bit16==0 then begin
     raise (Failure "set_buf got (0,0)")
   end;
@@ -617,11 +396,10 @@ let encode_mcus mcu_cnt info bmp_dct buf_out =
   let dc_tbls = A.map fst info.comp_inv_tbls in
   let rec enc_mcu buf_cur block_idx comp_idx =
     let rec enc_acs buf idx zero_cnt _ac_idx =
-(*      printf "  enc_acs: zero_cnt=%d ac_idx=%d\n" zero_cnt _ac_idx;*)
       match _ac_idx with
         64 ->
           if zero_cnt <> 0
-            then (*let () = printf "  env_acs: EOB\n%!" in *)set_buf ac_tbls.(comp_idx).(0) buf
+            then set_buf ac_tbls.(comp_idx).(0) buf
             else buf
       | ac_idx when bmp_dct.(idx).(ac_idx) == 0 ->
         if zero_cnt == 15
@@ -630,16 +408,13 @@ let encode_mcus mcu_cnt info bmp_dct buf_out =
           else enc_acs buf idx (zero_cnt+1) (ac_idx+1)
       | ac_idx ->
         let (len, bits) as s = encode_s bmp_dct.(idx).(ac_idx) in
-(*        printf "  enc_acs: zero_cnt=%2d ac_idx=%2d val = %+3d; %d %04x\n" zero_cnt _ac_idx bmp_dct.(idx).(ac_idx) len bits;*)
         let new_buf = buf |> set_buf ac_tbls.(comp_idx).((zero_cnt lsl 4) lor len)
                           |> set_buf s in
         enc_acs new_buf idx 0 (ac_idx+1) in
     if comp_idx == 3
       then buf_cur
-      else (*let () = printf "enc_mcu:%d %d\n%!" block_idx comp_idx in*)
-           let block = bmp_dct.(block_idx+comp_idx) in
+      else let block = bmp_dct.(block_idx+comp_idx) in
            let (len, bits) as s = encode_s block.(0) in
-(*           printf "  -> dc %d: %d %04x\n%!" block.(0) len bits;*)
            let new_buf0 = set_buf dc_tbls.(comp_idx).(len) buf_cur in
            let new_buf1 = if len==0 then new_buf0 else set_buf s new_buf0 in
            let new_buf2 = enc_acs new_buf1 (block_idx+comp_idx) 0 1 in
@@ -649,7 +424,6 @@ let encode_mcus mcu_cnt info bmp_dct buf_out =
       then buf
       else enc_mcu buf block_idx 0
         |> enc_loop (block_idx+3) in
-(*  printf "encode_mcus %d\n" (A.length bmp_dct); *)
   enc_loop 0 buf_out;;
 
 let fix_jpg_info raw_data (bmp : Bitmap.bmp) =
@@ -706,12 +480,10 @@ let main () =
   let (mcu_cnt, bmp_flat) = bmp_flatten bmp in
   printf "[+] dct...\n%!";
   let bmp_dct = dct bmp_flat in
-
   printf "[+] zigzag...\n%!";
   let bmp_linear = zigzag info bmp_dct in
   printf "[+] quantize...\n%!";
   quantize info bmp_linear;
-
   printf "[+] fixing diff...\n%!";
   fix_dc_diff mcu_cnt bmp_linear;
   let jpeg_buf = make_buf (mcu_cnt*3*64) in
@@ -719,29 +491,7 @@ let main () =
   let final_buf = encode_mcus mcu_cnt info bmp_linear jpeg_buf in
   let (bmp_raw_len, bmp_raw) =
     add_ff00 ((final_buf.jpeg_buf_idx+7)/8) final_buf.jpeg_buf in
-
-(*
-let (final_idx, bufs_flat) = extract_mcus final_buf.jpeg_buf info 0 in
-printf "dequ\n%!";
-dequantize info bufs_flat;
-let bufs_8x8s = unzigzag info bufs_flat in
-let bufs_idct = idct info bufs_8x8s in
-let bmp_ = Bitmap.make jpg.sof.sof_height jpg.sof.sof_width in
-blit_plane jpg info bufs_idct bmp_.bits;
-let print_bits arr =
-  flip A.iter arr (fun row ->
-  flip A.iter row (fun (r,g,b) ->
-  printf "%02x%02x%02x " (int_of_char r) (int_of_char g) (int_of_char b));
-  printf "\n%!") in
-(*print_bits bmp.bits;
-printf "\n%!";
-print_bits bmp_.bits;*)
-let fout=open_out_bin (inname ^ "_out.bmp") in
-Bitmap.output_bmp fout bmp_;
-close_out fout;
-*)
-
-  printf "result data length: %d\n%!" ((final_buf.jpeg_buf_idx + 7)/8);
+  printf "result data length: %.2f KB\n%!" (float_of_int ((final_buf.jpeg_buf_idx + 7)/8) /. 1024.0);
   let () =
     let fout = open_out_bin outname in
     output fout jpgraw_data 0 (String.length jpgraw_data-2);
