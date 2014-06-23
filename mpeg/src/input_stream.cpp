@@ -1,11 +1,10 @@
+#include "debugutils.h"
 #include "input_stream.h"
 
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
-
-#include "input_stream.h"
 
 using namespace std;
 
@@ -17,7 +16,9 @@ input_stream_t::input_stream_t(const char *filename)
     throw std::runtime_error("Cannot open input file");
   std::fseek(this->fp, 0, SEEK_END);
   this->bitsiz = static_cast<std::size_t>(std::ftell(this->fp)) * 8;
-  std::fread(this->buf, 1, is_buf_siz, this->fp);
+  std::fseek(this->fp, 0, SEEK_SET);
+  size_t rd = std::fread(this->buf, 1, is_buf_siz, this->fp);
+  DPRINTF(5, "             [d] %s: read=%u\n", __PRETTY_FUNCTION__, rd);
 }
 
 input_stream_t::~input_stream_t() {
@@ -31,6 +32,7 @@ void input_stream_t::advance() {
   if (this->pos < is_buf_lim*8)
     return;
   std::memcpy(this->buf, this->buf+is_buf_lim, delta);
-  std::fread(this->buf+delta, 1, is_buf_siz-delta, this->fp);
+  std::size_t rd = std::fread(this->buf+delta, 1, is_buf_siz-delta, this->fp);
   this->pos -= is_buf_lim*8;
+  DPRINTF(5, "             [d] %s: pos=%u read=%u\n", __PRETTY_FUNCTION__, this->pos, rd);
 }

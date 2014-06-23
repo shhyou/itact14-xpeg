@@ -1,5 +1,7 @@
+#include "debugutils.h"
 #include "input_stream.h"
 
+#include <ctime>
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
@@ -7,6 +9,15 @@
 #include <stdexcept>
 
 #define TEST_BIT(arr,pos) ((arr)[(pos)>>3] & (0x80 >> ((pos) & 7)))
+
+static const uint32_t picture_start_code = 0x00010000;
+static const uint32_t slice_start_code_min = 0x01010000;
+static const uint32_t slice_start_code_max = 0xaf010000;
+static const uint32_t user_data_start_code = 0xb2010000;
+static const uint32_t sequence_header_code = 0xb3010000;
+static const uint32_t extension_start_code = 0xb5010000;
+static const uint32_t sequence_end_code    = 0xb7010000;
+static const uint32_t group_start_code     = 0xb8010000;
 
 static const uint32_t default_intra_quantizer_matrix[64] = {
   8,
@@ -84,15 +95,6 @@ public:
   void parseAll();
 };
 
-static const uint32_t picture_start_code = 0x00010000;
-static const uint32_t slice_start_code_min = 0x01010000;
-static const uint32_t slice_start_code_max = 0xaf010000;
-static const uint32_t user_data_start_code = 0xb2010000;
-static const uint32_t sequence_header_code = 0xb3010000;
-static const uint32_t extension_start_code = 0xb5010000;
-static const uint32_t sequence_end_code    = 0xb7010000;
-static const uint32_t group_start_code     = 0xb8010000;
-
 void mpeg_parser::load_quantizer_matrix(uint32_t (&mat)[64]) {
   size_t shift = 8 - (this->bitpos & 7);
   for (size_t i = 0; i != 64; ++i) {
@@ -112,11 +114,15 @@ void mpeg_parser::skipExtensionsAndUserData() {
 }
 
 void mpeg_parser::parseAll() {
+  DEBUG_TRACE("");
 
   // search for video sequence
-  while (this->peekInt(this->bitpos) != sequence_header_code)
+  // XXX TODO: robustness: add boundary check
+  while (this->peekInt(this->bitpos) != sequence_header_code) {
     this->bitpos += 8;
+  }
 
+  size_t seq_count = 0;
   // video_sequence()
   while (this->peekInt(this->bitpos) == sequence_header_code) {
     // sequence_header()
@@ -127,6 +133,7 @@ void mpeg_parser::parseAll() {
       this->bitpos += 32 + 12 + 12 + 4 + 4 + 18 + 1 + 10 + 1;
 
       if (TEST_BIT(this->bitbuf, this->bitpos)) {
+        DPRINTF(5, "             [d] seq %4u: load_intra_quantizer_matrix\n", seq_count);
         this->load_quantizer_matrix(this->video_cxt.intra_quantizer_matrix);
         this->bitpos += 1 + 8*64;
       } else {
@@ -136,6 +143,7 @@ void mpeg_parser::parseAll() {
       }
 
       if (TEST_BIT(this->bitbuf, this->bitpos)) {
+        DPRINTF(5, "             [d] seq %4u: load_non_intra_quantizer_matrix\n", seq_count);
         this->load_quantizer_matrix(this->video_cxt.non_intra_quantizer_matrix);
         this->bitpos += 1 + 8*64;
       } else {
@@ -147,10 +155,14 @@ void mpeg_parser::parseAll() {
       this->next_start_code();
       this->skipExtensionsAndUserData();
     }
+    return;
     // back to video_sequence()
     while (this->peekInt(this->bitpos) == group_start_code) {
       
     }
+
+    // end of groups
+    ++seq_count;
   }
   // end
   if (this->peekInt(this->bitpos) != sequence_end_code) {
@@ -159,5 +171,7 @@ void mpeg_parser::parseAll() {
 }
 
 int main() {
+  mpeg_parser *m1v = new mpeg_parser("../phw_mpeg/I_ONLY.M1V");
+  m1v->parseAll();
   return 0;
 }
