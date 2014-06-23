@@ -12,6 +12,8 @@
 
 #define TEST_BIT(arr,pos) ((arr)[(pos)>>3] & (0x80 >> ((pos) & 7)))
 
+//#include "huffman_tbl.cpp"
+
 static const uint32_t picture_start_code      = 0x00010000;
 static const uint32_t slice_start_code_min_le = 0x00000101;
 static const uint32_t slice_start_code_max_le = 0x000001af;
@@ -50,6 +52,13 @@ static const uint32_t default_non_intra_quantizer_matrix[64] = {
   16, 16, 16, 16, 16, 16, 16, 16,
 };
 
+static const unsigned int picbuf_max = 4;
+static const unsigned int w_max = 768;
+static const unsigned int h_max = 576;
+static const unsigned int w_mcroblk_max = w_max / 16;
+static const unsigned int h_mcroblk_max = h_max / 16;
+static const unsigned int mcroblk_max = w_mcroblk_max * h_mcroblk_max;
+
 class mpeg_parser {
   input_stream_t fin;
   std::size_t& bitpos;
@@ -61,6 +70,9 @@ class mpeg_parser {
     uint32_t intra_quantizer_matrix[64];
     uint32_t non_intra_quantizer_matrix[64];
     std::uint32_t time_code;
+
+    int w_mcroblk_cnt;
+    int h_mcroblk_cnt;
   } video_cxt;
 
   struct pic_cxt_t {
@@ -83,8 +95,20 @@ class mpeg_parser {
     unsigned int quantizer_scale;
   } pic_cxt;
 
-  struct mcrblk_cxt_t {
-  } mcrblk_cxt;
+  struct mcroblk_cxt_t {
+    uint16_t raw_dc[8*8] __attribute__ ((aligned(32)));
+    uint16_t quantizer_scale __attribute__ ((aligned(32)));
+    int motion_h_forward_code;
+    int motion_h_forward_r;
+    int motion_V_forward_code;
+    int motion_v_forward_r;
+  } mcroblk_cxts[mcroblk_max];
+
+  struct picbuf_t {
+    uint8_t rgb[h_max*w_max*3];
+  } picbuf[picbuf_max];
+
+  picbuf_t *F, *C, *B;
 
   // utilities
   uint32_t peekInt(size_t pos) {
@@ -94,6 +118,12 @@ class mpeg_parser {
   }
 
   uint32_t peekInt_be(size_t pos) { return __builtin_bswap32(this->peekInt(pos)); }
+
+  uint32_t peek16bit(size_t pos) {
+    size_t b = pos >> 3;
+    uint32_t m = (this->bitbuf[b]<<16) | (this->bitbuf[b+1]<<8) | this->bitbuf[b];
+    return (m >> (8 - (pos & 7))) & 0xffff;
+  }
 
   void skipExtensionsAndUserData();
   void load_quantizer_matrix(uint32_t (&mat)[64]);
@@ -110,7 +140,13 @@ class mpeg_parser {
 
 public:
   mpeg_parser(const char *filename)
-    : fin(filename), bitpos(fin.pos), bitbuf(fin.buf) {}
+    : fin(filename), bitpos(fin.pos), bitbuf(fin.buf)
+  {
+    this->F = &this->picbuf[0];
+    this->C = &this->picbuf[1];
+    this->B = &this->picbuf[2];
+  }
+
   ~mpeg_parser() {}
 
   void parseAll();
@@ -141,12 +177,12 @@ bool mpeg_parser::slice() {
     uint32_t m = this->peekInt_be(this->bitpos);
     if (m < slice_start_code_min_le || slice_start_code_max_le < m)
       return false;
-    this->pic_cxt.slice_vpos = (m & 0xff) - 1;
+    this->pic_cxt.slice_vpos = m & 0xff;
   }
 
   this->pic_cxt.quantizer_scale = this->bitbuf[(this->bitpos>>3) + 4] >> 3;
 
-  dprintf5("         slice_vpos = %u (@ %u), quantizer_scale = %u\n", this->pic_cxt.slice_vpos, this->pic_cxt.slice_vpos*16, this->pic_cxt.quantizer_scale);
+  dprintf5("%08x slice_vpos = %u (@ %u), quantizer_scale = %u\n", this->bitpos, this->pic_cxt.slice_vpos, this->pic_cxt.slice_vpos*16, this->pic_cxt.quantizer_scale);
 
   this->bitpos += 32 + 5;
   while (TEST_BIT(this->bitbuf, this->bitpos))
@@ -157,7 +193,24 @@ bool mpeg_parser::slice() {
   // XXX TODO: macroblock layer
   // XXX TODO: reset parameters
 
-  this->next_start_code();
+  unsigned int mcroblk_addr = (this->pic_cxt.slice_vpos - 1)*this->video_cxt.w_mcroblk_cnt - 1;
+
+  if (this->pic_cxt.pic_cod_typ == 1) {
+    while ((this->bitbuf[this->bitpos>>3] & (0xff >> (this->bitpos&7))) != 0
+        || (this->peekInt((this->bitpos+7)&(~7u))&0x00ffffff) != 0x00010000)
+    {
+      
+    }
+  } else {
+    while ((this->bitbuf[this->bitpos>>3] & (0xff >> (this->bitpos&7))) != 0
+        || (this->peekInt((this->bitpos+7)&(~7u))&0x00ffffff) != 0x00010000)
+    {
+      // XXX TODO: support B-frame and P-frame
+      // skip it for now
+      this->next_start_code();
+    }
+  }
+
   throw std::runtime_error("USER REQUEST TERMINATION");
   return true;
 }
@@ -218,10 +271,23 @@ bool mpeg_parser::picture() {
   this->next_start_code();
   this->skipExtensionsAndUserData();
 
+  if (this->pic_cxt.pic_cod_typ != 3) { // I frame or P frame
+    std::swap(this->F, this->B);
+    // XXX TODO: display this->F
+  }
+
+  std::memset(this->mcroblk_cxts, 0, sizeof(this->mcroblk_cxts));
   // slices
   for (;;) {
     bool success = this->slice();
     if (not success) break;
+  }
+  // XXX TODO: picture decoding (to this->C)
+
+  if (this->pic_cxt.pic_cod_typ == 3) { // B frame
+    // XXX TODO: display this->C
+  } else { // I frame or P frame
+    std::swap(this->C, this->B);
   }
 
 #if DEBUG_LEVEL >= 5
@@ -247,7 +313,9 @@ void mpeg_parser::parseAll() {
     {
       uint32_t siz = this->peekInt_be(this->bitpos+32);
       this->video_cxt.width = siz >> (32 - 12);
+      this->video_cxt.w_mcroblk_cnt = (this->video_cxt.width + 15)/16;
       this->video_cxt.height = (siz >> (32 - 12 - 12)) & 0xfff;
+      this->video_cxt.h_mcroblk_cnt = (this->video_cxt.height + 15)/16;
       this->bitpos += 32 + 12 + 12 + 4 + 4 + 18 + 1 + 10 + 1;
       dprintf4("[i] seq %4u: size=%ux%u\n", seq_count, this->video_cxt.width, this->video_cxt.height);
 
