@@ -12,14 +12,14 @@
 
 #define TEST_BIT(arr,pos) ((arr)[(pos)>>3] & (0x80 >> ((pos) & 7)))
 
-static const uint32_t picture_start_code    = 0x00010000;
-static const uint32_t slice_start_code_umin = 0x00000101;
-static const uint32_t slice_start_code_umax = 0x000001af;
-static const uint32_t user_data_start_code  = 0xb2010000;
-static const uint32_t sequence_header_code  = 0xb3010000;
-static const uint32_t extension_start_code  = 0xb5010000;
-static const uint32_t sequence_end_code     = 0xb7010000;
-static const uint32_t group_start_code      = 0xb8010000;
+static const uint32_t picture_start_code      = 0x00010000;
+static const uint32_t slice_start_code_min_le = 0x00000101;
+static const uint32_t slice_start_code_max_le = 0x000001af;
+static const uint32_t user_data_start_code    = 0xb2010000;
+static const uint32_t sequence_header_code    = 0xb3010000;
+static const uint32_t extension_start_code    = 0xb5010000;
+static const uint32_t sequence_end_code       = 0xb7010000;
+static const uint32_t group_start_code        = 0xb8010000;
 
 static const uint32_t default_intra_quantizer_matrix[64] = {
   8,
@@ -93,20 +93,15 @@ class mpeg_parser {
     return *reinterpret_cast<uint32_t*>(this->bitbuf + (pos>>3));
   }
 
+  uint32_t peekInt_be(size_t pos) { return __builtin_bswap32(this->peekInt(pos)); }
+
   void skipExtensionsAndUserData();
   void load_quantizer_matrix(uint32_t (&mat)[64]);
 
   void next_start_code() {
     this->bitpos = (this->bitpos+7u)&(~7u);
-    for (;;) {
-      uint32_t m = this->peekInt(this->bitpos);
-      while (m & 0x0000ffff) {
-        this->bitpos += 16;
-        m = this->peekInt(this->bitpos);
-      }
-      if ((m&0x00ffffff) == 0x00010000)
-        break;
-    }
+    while ((this->peekInt(this->bitpos)&0x00ffffff) != 0x00010000)
+      this->bitpos += 8;
   }
 
   // real parsing
@@ -143,23 +138,27 @@ bool mpeg_parser::slice() {
   DEBUG_TRACE("");
 
   {
-    uint32_t m = __builtin_bswap32(this->peekInt(this->bitpos));
-    if (m < slice_start_code_umin && slice_start_code_umax < m)
+    uint32_t m = this->peekInt_be(this->bitpos);
+    if (m < slice_start_code_min_le || slice_start_code_max_le < m)
       return false;
-    this->pic_cxt.slice_vpos = m & 0xff;
+    this->pic_cxt.slice_vpos = (m & 0xff) - 1;
   }
 
-  this->pic_cxt.quantizer_scale = this->bitbuf[(this->bitpos>>3) + 1] >> 3;
+  this->pic_cxt.quantizer_scale = this->bitbuf[(this->bitpos>>3) + 4] >> 3;
+
+  dprintf5("         slice_vpos = %u (@ %u), quantizer_scale = %u\n", this->pic_cxt.slice_vpos, this->pic_cxt.slice_vpos*16, this->pic_cxt.quantizer_scale);
 
   this->bitpos += 32 + 5;
   while (TEST_BIT(this->bitbuf, this->bitpos))
     this->bitpos += 9;
   ++this->bitpos;
 
+  dprintf5("%08x begin marcoblock\n", this->bitpos);
   // XXX TODO: macroblock layer
   // XXX TODO: reset parameters
 
   this->next_start_code();
+  throw std::runtime_error("USER REQUEST TERMINATION");
   return true;
 }
 
@@ -169,13 +168,19 @@ bool mpeg_parser::picture() {
   if (this->peekInt(this->bitpos) != picture_start_code)
     return false;
 
+#if DEBUG_LEVEL >= 5
+  static unsigned int pic_count = 0;
+#endif
+
   {
-    uint32_t m = this->peekInt(this->bitpos+32);
+    uint32_t m = this->peekInt_be(this->bitpos+32);
     this->pic_cxt.pic_cod_typ = m >> (32 - 10 - 3)&7;
     this->pic_cxt.temporal_ref = m >> (32 - 10)&1023;
+
+    dprintf5("%08x pic %4u: type = %u, temporal = %u\n", this->bitpos, pic_count, this->pic_cxt.pic_cod_typ, this->pic_cxt.temporal_ref);
   }
 
-  if (this->pic_cxt.pic_cod_typ<2 || this->pic_cxt.pic_cod_typ>3) {
+  if (this->pic_cxt.pic_cod_typ<1 || this->pic_cxt.pic_cod_typ>3) {
     throw std::runtime_error(
       ( "mpeg_parser::picture(): unsupported picture type "
       + std::to_string(this->pic_cxt.pic_cod_typ)).c_str()
@@ -219,6 +224,10 @@ bool mpeg_parser::picture() {
     if (not success) break;
   }
 
+#if DEBUG_LEVEL >= 5
+  ++pic_count;
+#endif
+
   return true;
 }
 
@@ -236,26 +245,29 @@ void mpeg_parser::parseAll() {
   while (this->peekInt(this->bitpos) == sequence_header_code) {
     // sequence_header()
     {
-      uint32_t siz = this->peekInt(this->bitpos+32);
-      this->video_cxt.width = (siz >> (32 - 12 - 12)) & 0xfff;
-      this->video_cxt.height = siz >> (32 - 12);
+      uint32_t siz = this->peekInt_be(this->bitpos+32);
+      this->video_cxt.width = siz >> (32 - 12);
+      this->video_cxt.height = (siz >> (32 - 12 - 12)) & 0xfff;
       this->bitpos += 32 + 12 + 12 + 4 + 4 + 18 + 1 + 10 + 1;
+      dprintf4("[i] seq %4u: size=%ux%u\n", seq_count, this->video_cxt.width, this->video_cxt.height);
 
       if (TEST_BIT(this->bitbuf, this->bitpos)) {
-        DPRINTF(5, "             [d] seq %4u: load_intra_quantizer_matrix\n", seq_count);
+        dprintf5("seq %4u: load_intra_quantizer_matrix\n", seq_count);
         this->load_quantizer_matrix(this->video_cxt.intra_quantizer_matrix);
         this->bitpos += 1 + 8*64;
       } else {
+        dprintf5("seq %4u: default intra_quantizer_matrix\n", seq_count);
         std::memcpy( this->video_cxt.intra_quantizer_matrix
                    ,         default_intra_quantizer_matrix
                    ,  sizeof(default_intra_quantizer_matrix) );
       }
 
       if (TEST_BIT(this->bitbuf, this->bitpos)) {
-        DPRINTF(5, "             [d] seq %4u: load_non_intra_quantizer_matrix\n", seq_count);
+        dprintf5("seq %4u: load_non_intra_quantizer_matrix\n", seq_count);
         this->load_quantizer_matrix(this->video_cxt.non_intra_quantizer_matrix);
         this->bitpos += 1 + 8*64;
       } else {
+        dprintf5("seq %4u: default non_intra_quantizer_matrix\n", seq_count);
         std::memcpy( this->video_cxt.non_intra_quantizer_matrix
                    ,         default_non_intra_quantizer_matrix
                    ,  sizeof(default_non_intra_quantizer_matrix) );
@@ -268,7 +280,8 @@ void mpeg_parser::parseAll() {
     // back to video_sequence()
     // enter group_of_pictures layer
     while (this->peekInt(this->bitpos) == group_start_code) {
-      this->video_cxt.time_code = this->peekInt(this->bitpos+32) >> (32 - 25);
+      dprintf5("%08x: group start code\n", this->bitpos);
+      this->video_cxt.time_code = this->peekInt_be(this->bitpos+32) >> (32 - 25);
       this->bitpos += 32 + 25 + 1 + 1;
       this->next_start_code();
       this->skipExtensionsAndUserData();
@@ -289,7 +302,11 @@ void mpeg_parser::parseAll() {
 }
 
 int main() {
-  mpeg_parser *m1v = new mpeg_parser("../phw_mpeg/I_ONLY.M1V");
-  m1v->parseAll();
+  try {
+    mpeg_parser *m1v = new mpeg_parser("../phw_mpeg/I_ONLY.M1V");
+    m1v->parseAll();
+  } catch (std::exception& e) {
+    std::fprintf(stderr, "Fatal error: %s\n", e.what());
+  }
   return 0;
 }

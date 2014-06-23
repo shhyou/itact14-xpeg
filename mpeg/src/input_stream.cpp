@@ -18,7 +18,7 @@ input_stream_t::input_stream_t(const char *filename)
   this->bitsiz = static_cast<std::size_t>(std::ftell(this->fp)) * 8;
   std::fseek(this->fp, 0, SEEK_SET);
   size_t rd = std::fread(this->buf, 1, is_buf_siz, this->fp);
-  DPRINTF(5, "             [d] %s: read=%u\n", __PRETTY_FUNCTION__, rd);
+  dprintf5("%s: read=%u\n", __PRETTY_FUNCTION__, rd);
 }
 
 input_stream_t::~input_stream_t() {
@@ -34,5 +34,5 @@ void input_stream_t::advance() {
   std::memcpy(this->buf, this->buf+is_buf_lim, delta);
   std::size_t rd = std::fread(this->buf+delta, 1, is_buf_siz-delta, this->fp);
   this->pos -= is_buf_lim*8;
-  DPRINTF(5, "             [d] %s: pos=%u read=%u\n", __PRETTY_FUNCTION__, this->pos, rd);
+  dprintf5("%s: pos=%u read=%u\n", __PRETTY_FUNCTION__, this->pos, rd);
 }
