@@ -10,7 +10,7 @@ class input_stream_t {
   std::FILE *fp;
   std::size_t bitsiz;
 public:
-  std::uint32_t buf[is_buf_siz/sizeof(uint32_t)];
+  std::uint8_t buf[is_buf_siz];
   std::size_t pos;
   input_stream_t(const char *filename);
   ~input_stream_t();
