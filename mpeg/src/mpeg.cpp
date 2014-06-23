@@ -12,7 +12,7 @@
 
 #define TEST_BIT(arr,pos) ((arr)[(pos)>>3] & (0x80 >> ((pos) & 7)))
 
-//#include "huffman_tbl.cpp"
+#include "huffman_tbl.h"
 
 static const uint32_t picture_start_code      = 0x00010000;
 static const uint32_t slice_start_code_min_le = 0x00000101;
@@ -92,16 +92,12 @@ class mpeg_parser {
 
     // slice data
     unsigned int slice_vpos;
-    unsigned int quantizer_scale;
+    uint16_t quantizer_scale;
   } pic_cxt;
 
   struct mcroblk_cxt_t {
-    uint16_t raw_dc[8*8] __attribute__ ((aligned(32)));
+    uint16_t dct_zz[6][8*8] __attribute__ ((aligned(32)));
     uint16_t quantizer_scale __attribute__ ((aligned(32)));
-    int motion_h_forward_code;
-    int motion_h_forward_r;
-    int motion_V_forward_code;
-    int motion_v_forward_r;
   } mcroblk_cxts[mcroblk_max];
 
   struct picbuf_t {
@@ -119,7 +115,7 @@ class mpeg_parser {
 
   uint32_t peekInt_be(size_t pos) { return __builtin_bswap32(this->peekInt(pos)); }
 
-  uint32_t peek16bit(size_t pos) {
+  uint32_t peek16(size_t pos) {
     size_t b = pos >> 3;
     uint32_t m = (this->bitbuf[b]<<16) | (this->bitbuf[b+1]<<8) | this->bitbuf[b];
     return (m >> (8 - (pos & 7))) & 0xffff;
@@ -145,6 +141,7 @@ public:
     this->F = &this->picbuf[0];
     this->C = &this->picbuf[1];
     this->B = &this->picbuf[2];
+    init_huff_tbls();
   }
 
   ~mpeg_parser() {}
@@ -199,7 +196,33 @@ bool mpeg_parser::slice() {
     while ((this->bitbuf[this->bitpos>>3] & (0xff >> (this->bitpos&7))) != 0
         || (this->peekInt((this->bitpos+7)&(~7u))&0x00ffffff) != 0x00010000)
     {
-      
+      while ((this->peek16(this->bitpos)>>5) == 0x000f)
+        this->bitpos += 11;
+      while ((this->peek16(this->bitpos)>>5) == 0x0008) {
+        mcroblk_addr += 33;
+        this->bitpos += 11;
+      }
+      { // macroblock_address_increment
+        uint32_t m = this->peek16(this->bitpos);
+        mcroblk_addr += huff_mcroblk_addrinc[m][1];
+        this->bitpos += huff_mcroblk_addrinc[m][0];
+      }
+      bool has_quantizer;
+      { // macroblock_type
+        uint32_t m = this->peek16(this->bitpos);
+        has_quantizer = huff_mcroblk_typ[1][m].quant;
+        this->bitpos += huff_mcroblk_typ[1][m].len;
+      }
+      if (has_quantizer) {
+        this->pic_cxt.quantizer_scale = this->bitbuf[this->bitpos] >> 3;
+        this->bitpos += 5;
+      }
+      this->mcroblk_cxts[mcroblk_addr].quantizer_scale = this->pic_cxt.quantizer_scale;
+      for (int k = 0; k != 6; ++k) {
+        uint16_t (&dct_zz)[8*8] = this->mcroblk_cxts[mcroblk_addr].dct_zz[k];
+        // XXX TODO
+        throw std::runtime_error("No DC/AC Huff Tbls Yet");
+      }
     }
   } else {
     while ((this->bitbuf[this->bitpos>>3] & (0xff >> (this->bitpos&7))) != 0
