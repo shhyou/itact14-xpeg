@@ -1,0 +1,34 @@
+# http://stackoverflow.com/questions/4058840/
+
+ifeq ($(findstring $(OS), Windows_NT), Windows_NT)
+
+export exe := .exe
+
+unam := $(shell uname 2>&1)
+HOST_OS := unknown
+ifeq ($(findstring MINGW, $(unam)), MINGW)
+HOST_OS := mingw
+endif
+ifeq ($(findstring CYGWIN, $(unam)), CYGWIN)
+HOST_OS := cygwin
+endif
+ifeq ($(findstring MSYS, $(unam)), MSYS)
+HOST_OS := msys
+endif
+
+ifeq ($(findstring $(HOST_OS), cygwin mingw msys),)
+export fixpath = $(subst /,\,$(1))
+export if_not_exist = if not exist $(1) $(2)
+export RM := del /Q
+else
+export fixpath = $(1)
+export if_not_exist  = if [ ! -d $(1) ]; then $(2); fi
+export RM := rm -f
+endif
+
+else
+export exe :=
+export fixpath = $(1)
+export if_not_exist  = if [ ! -d $(1) ]; then $(2); fi
+export RM := rm -f
+endif
