@@ -157,6 +157,7 @@ bool mpeg_parser::slice() {
   ++this->bitpos;
 
   // XXX TODO: macroblock layer
+  // XXX TODO: reset parameters
 
   this->next_start_code();
   return true;
