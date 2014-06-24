@@ -1,4 +1,5 @@
 #include "debugutils.h"
+#include "mpeg.h"
 #include "input_stream.h"
 
 #include <ctime>
@@ -59,46 +60,23 @@ static const unsigned int w_mcroblk_max = w_max / 16;
 static const unsigned int h_mcroblk_max = h_max / 16;
 static const unsigned int mcroblk_max = w_mcroblk_max * h_mcroblk_max;
 
+static void slow_jpeg_decode(
+  uint8_t buf[],
+  video_cxt_t *video_cxt,
+  pic_cxt_t *pic_cxt,
+  mcroblk_cxt_t mcroblk_cxts[])
+{
+  
+}
+
 class mpeg_parser {
   input_stream_t fin;
   std::size_t& bitpos;
   std::uint8_t (&bitbuf)[is_buf_siz];
 
-  struct video_cxt_t {
-    int width;
-    int height;
-    uint32_t intra_quantizer_matrix[64];
-    uint32_t non_intra_quantizer_matrix[64];
-    std::uint32_t time_code;
-
-    int w_mcroblk_cnt;
-    int h_mcroblk_cnt;
-  } video_cxt;
-
-  struct pic_cxt_t {
-    unsigned int pic_cod_typ;
-    unsigned int temporal_ref;
-
-    // forwarding info
-    bool f_fullpel_vec;
-    unsigned int f_fcode;
-    unsigned int f_rsiz;
-    unsigned int f_f;
-
-    bool b_fullpel_vec;
-    unsigned int b_fcode;
-    unsigned int b_rsiz;
-    unsigned int b_f;
-
-    // slice data
-    unsigned int slice_vpos;
-    uint16_t quantizer_scale;
-  } pic_cxt;
-
-  struct mcroblk_cxt_t {
-    uint16_t dct_zz[6][8*8] __attribute__ ((aligned(32)));
-    uint16_t quantizer_scale __attribute__ ((aligned(32)));
-  } mcroblk_cxts[mcroblk_max];
+  video_cxt_t video_cxt;
+  pic_cxt_t pic_cxt;
+  mcroblk_cxt_t mcroblk_cxts[mcroblk_max] __attribute__ ((aligned(32)));
 
   struct picbuf_t {
     uint8_t rgb[h_max*w_max*3];
@@ -138,6 +116,7 @@ public:
   mpeg_parser(const char *filename)
     : fin(filename), bitpos(fin.pos), bitbuf(fin.buf)
   {
+    DEBUG_TRACE("");
     this->F = &this->picbuf[0];
     this->C = &this->picbuf[1];
     this->B = &this->picbuf[2];
@@ -177,7 +156,8 @@ bool mpeg_parser::slice() {
     this->pic_cxt.slice_vpos = m & 0xff;
   }
 
-  this->pic_cxt.quantizer_scale = this->bitbuf[(this->bitpos>>3) + 4] >> 3;
+  this->pic_cxt.quantizer_scale =
+    static_cast<uint16_t>(this->bitbuf[(this->bitpos>>3) + 4] >> 3);
 
   dprintf5("%08x slice_vpos = %u (@ %u), quantizer_scale = %u\n", this->bitpos, this->pic_cxt.slice_vpos, this->pic_cxt.slice_vpos*16, this->pic_cxt.quantizer_scale);
 
@@ -207,23 +187,64 @@ bool mpeg_parser::slice() {
         mcroblk_addr += huff_mcroblk_addrinc[m][1];
         this->bitpos += huff_mcroblk_addrinc[m][0];
       }
-      bool has_quantizer;
+      const mcroblk_typ_t *mcroblk_typ;
       { // macroblock_type
         uint32_t m = this->peek16(this->bitpos);
-        has_quantizer = huff_mcroblk_typ[1][m].quant;
-        this->bitpos += huff_mcroblk_typ[1][m].len;
+        mcroblk_typ = &huff_mcroblk_typ[this->pic_cxt.pic_cod_typ][m];
+        this->bitpos += huff_mcroblk_typ[this->pic_cxt.pic_cod_typ][m].len;
       }
-      if (has_quantizer) {
-        this->pic_cxt.quantizer_scale = this->bitbuf[this->bitpos] >> 3;
+      if (mcroblk_typ->quant) {
+        this->pic_cxt.quantizer_scale =
+          static_cast<uint16_t>(this->bitbuf[this->bitpos] >> 3);
         this->bitpos += 5;
       }
       this->mcroblk_cxts[mcroblk_addr].quantizer_scale = this->pic_cxt.quantizer_scale;
+
       for (int k = 0; k != 6; ++k) {
         uint16_t (&dct_zz)[8*8] = this->mcroblk_cxts[mcroblk_addr].dct_zz[k];
-        // XXX TODO
-        throw std::runtime_error("No DC/AC Huff Tbls Yet");
+        dprintf5("block %d:\n", k);
+        // decode DC
+        {
+          uint32_t m = this->peek16(this->bitpos);
+          int len = huff_dc_ssss[k][m][0];
+          int dc_len = huff_dc_ssss[k][m][1];
+          this->bitpos += len;
+          if (dc_len == 0) {
+            dct_zz[0] = 0;
+            dprintf5("   dc_len=0\n");
+          } else {
+            int dc_diff = this->peekInt_be(this->bitpos&(~7u)) << (this->bitpos&7);
+            int msk = dc_diff >> 31;
+            dct_zz[0] = ((1<<dc_len)^msk) + (2&msk) + (dc_diff>>(32-dc_len));
+            dprintf5("   dc_len=%d, diff=%d\n", dc_len, ((unsigned)dc_diff)>>(32-dc_len));
+          }
+          this->bitpos += dc_len;
+        }
+        // decode AC
+        int i = 0;
+        for (;;) {
+          uint32_t m = this->peek16(this->bitpos);
+          if ((m&0xc000) == 0x8000) { // EOB = '10'
+            break;
+          } else if ((m&0xfc00) == 0x0400) { // escape = '0000 01'
+            // XXX TOOD: decode escape codes
+            throw std::logic_error("escape code not implemented");
+          } else {
+            int len = huff_dc_coef_next[m][0];
+            int run = huff_dc_coef_next[m][1];
+            int level = huff_dc_coef_next[m][2];
+            if (TEST_BIT(this->bitbuf, this->bitpos+len))
+              level = -level;
+            this->bitpos += len+1;
+            i += run + 1;
+            dct_zz[i] = level;
+            dprintf5("   coef_next: run=%d, level=%d\n", run, level);
+          }
+        }
+        this->bitpos += 2;
       }
     }
+    this->next_start_code();
   } else {
     while ((this->bitbuf[this->bitpos>>3] & (0xff >> (this->bitpos&7))) != 0
         || (this->peekInt((this->bitpos+7)&(~7u))&0x00ffffff) != 0x00010000)
@@ -234,7 +255,6 @@ bool mpeg_parser::slice() {
     }
   }
 
-  throw std::runtime_error("USER REQUEST TERMINATION");
   return true;
 }
 
@@ -297,6 +317,9 @@ bool mpeg_parser::picture() {
   if (this->pic_cxt.pic_cod_typ != 3) { // I frame or P frame
     std::swap(this->F, this->B);
     // XXX TODO: display this->F
+    static bool end = false;
+    if (end) throw std::runtime_error("USER REQUEST TERMINATION");
+    else     end = true;
   }
 
   std::memset(this->mcroblk_cxts, 0, sizeof(this->mcroblk_cxts));
@@ -306,6 +329,12 @@ bool mpeg_parser::picture() {
     if (not success) break;
   }
   // XXX TODO: picture decoding (to this->C)
+  slow_jpeg_decode(
+    this->C->rgb,
+    &this->video_cxt,
+    &this->pic_cxt,
+    this->mcroblk_cxts
+  );
 
   if (this->pic_cxt.pic_cod_typ == 3) { // B frame
     // XXX TODO: display this->C
