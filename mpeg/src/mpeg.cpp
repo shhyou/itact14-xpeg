@@ -2,6 +2,7 @@
 #include "mpeg.h"
 #include "input_stream.h"
 #include "bmp.h"
+#include "glshow.h"
 
 #include <ctime>
 #include <cmath>
@@ -313,7 +314,10 @@ public:
 
   ~mpeg_parser() {}
 
-  void parseAll();
+  int getWidth() { return this->video_cxt.width; }
+  int getHeight() { return this->video_cxt.height; }
+  void parseInfo();
+  void parseGOPEnd();
 };
 
 void mpeg_parser::debug_output(uint8_t buf[]) {
@@ -374,7 +378,6 @@ bool mpeg_parser::slice() {
 
   dprintf5("%08x begin marcoblock\n", this->bitpos);
   // XXX TODO: macroblock layer
-  // XXX TODO: reset parameters
 
   unsigned int mcroblk_addr = (this->pic_cxt.slice_vpos - 1)*this->video_cxt.w_mcroblk_cnt - 1;
   int past_intra_addr = -2;
@@ -439,7 +442,6 @@ bool mpeg_parser::slice() {
           } else {
             int len, run, level;
             if ((m&0xfc00) == 0x0400) { // escape = '0000 01'
-              //this->bitpos += 6;
               run = this->peek16(this->bitpos+6) >> (16 - 6);
               int m_ = this->peek16(this->bitpos+12);
               int msk = ((m_ << 16) >> 31) & 0xffffff00;
@@ -536,7 +538,8 @@ bool mpeg_parser::picture() {
   if (this->pic_cxt.pic_cod_typ != 3) { // I frame or P frame
     std::swap(this->F, this->B);
     // XXX TODO: display this->F
-    this->debug_output(this->F->rgb);
+    //this->debug_output(this->F->rgb);
+    gldraw(this->F->rgb);
 #if 1
     static int ___cnt = 0;
     if (___cnt >= DEBUG_CNT)
@@ -565,6 +568,7 @@ bool mpeg_parser::picture() {
 
   if (this->pic_cxt.pic_cod_typ == 3) { // B frame
     // XXX TODO: display this->C
+    throw std::logic_error("B frame display not implemented yet");
   } else { // I frame or P frame
     std::swap(this->C, this->B);
   }
@@ -576,7 +580,7 @@ bool mpeg_parser::picture() {
   return true;
 }
 
-void mpeg_parser::parseAll() {
+void mpeg_parser::parseInfo() {
   DEBUG_TRACE("");
 
   // search for video sequence
@@ -587,7 +591,8 @@ void mpeg_parser::parseAll() {
 
   size_t seq_count = 0;
   // video_sequence()
-  while (this->peekInt(this->bitpos) == sequence_header_code) {
+  // *** we only support one sequence now ***
+  if (this->peekInt(this->bitpos) == sequence_header_code) {
     // sequence_header()
     {
       uint32_t siz = this->peekInt_be(this->bitpos+32);
@@ -623,35 +628,55 @@ void mpeg_parser::parseAll() {
       this->next_start_code();
       this->skipExtensionsAndUserData();
     }
-
-    // back to video_sequence()
-    // enter group_of_pictures layer
-    while (this->peekInt(this->bitpos) == group_start_code) {
-      dprintf5("%08x: group start code\n", this->bitpos);
-      this->video_cxt.time_code = this->peekInt_be(this->bitpos+32) >> (32 - 25);
-      this->bitpos += 32 + 25 + 1 + 1;
-      this->next_start_code();
-      this->skipExtensionsAndUserData();
-      for (;;) {
-        this->fin.advance();
-        bool success = this->picture();
-        if (not success) break;
-      }
-    }
-
-    // end of groups
-    ++seq_count;
+  } else {
+    throw std::runtime_error("not a sequence_header");
   }
+}
+
+void mpeg_parser::parseGOPEnd() {
+  DEBUG_TRACE("");
+
+  // back to video_sequence()
+  // enter group_of_pictures layer
+  while (this->peekInt(this->bitpos) == group_start_code) {
+    dprintf5("%08x: group start code\n", this->bitpos);
+    this->video_cxt.time_code = this->peekInt_be(this->bitpos+32) >> (32 - 25);
+    this->bitpos += 32 + 25 + 1 + 1;
+    this->next_start_code();
+    this->skipExtensionsAndUserData();
+    for (;;) {
+      this->fin.advance();
+      bool success = this->picture();
+      if (not success) break;
+    }
+  }
+
+  // end of groups
+
   // end
   if (this->peekInt(this->bitpos) != sequence_end_code) {
     throw std::runtime_error("Error: expected sequence_end_code");
   }
 }
 
+
+
 int main() {
   try {
-    mpeg_parser *m1v = new mpeg_parser("../phw_mpeg/I_ONLY.M1V");
-    m1v->parseAll();
+    {
+      mpeg_parser *m1v = new mpeg_parser("../phw_mpeg/I_ONLY.M1V");
+      m1v->parseInfo();
+      glrun(m1v->getHeight(), m1v->getWidth());
+#if DEBUG_LEVEL == 0
+      delete m1v;
+    }
+    for (;;) {
+      mpeg_parser *m1v = new mpeg_parser("../phw_mpeg/I_ONLY.M1V");
+      m1v->parseInfo();
+#endif
+      m1v->parseGOPEnd();
+      delete m1v;
+    }
   } catch (std::exception& e) {
     std::fprintf(stderr, "Fatal error: %s\n", e.what());
   }

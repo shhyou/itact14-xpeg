@@ -1,12 +1,14 @@
 -include Makefile.common
 
-CXXFLAGS = -std=c++11 -MMD -g -DDEBUG_LEVEL=4 -DDEBUG_CNT=10 -Wall -Wshadow -Wextra -Wconversion -pedantic -Iinclude
-#CXXFLAGS = -std=c++11 -MMD -O2 -DDEBUG_LEVEL=0 -Wall -Wshadow -Wextra -Wconversion -pedantic -Iinclude
+CXXFLAGS = -std=c++11 -MMD -g -DDEBUG_LEVEL=1 -DDEBUG_CNT=1000 -Wall -Wshadow -Wextra -Wconversion -pedantic -Iinclude
+#CXXFLAGS = -std=c++11 -MMD -O2 -DDEBUG_LEVEL=0 -DDEBUG_CNT=1000 -Wall -Wshadow -Wextra -pedantic -Iinclude
 CXX = g++
+LIBS = -lfreeglut -lopengl32 -lglew32
 
 OBJS = \
 	bin/bmp \
 	bin/input_stream \
+	bin/glshow \
 	bin/mpeg
 
 TARGET = mpeg$(exe)
@@ -24,7 +26,7 @@ test: $(TARGET)
 
 # Compile the target file (e.g. hw3_1.exe)
 $(TARGET): %$(exe): bin/%.o $(OBJS:=.o)
-	$(CXX) $(CXXFLAGS) -o $@ $^
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LIBS)
 
 # Compile library files, e.g. `instruction`, `tokenizer`
 bin/%.o: src/%.cpp
