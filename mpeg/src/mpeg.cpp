@@ -3,6 +3,7 @@
 #include "input_stream.h"
 
 #include <ctime>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
@@ -12,6 +13,10 @@
 #include <stdexcept>
 
 #define TEST_BIT(arr,pos) ((arr)[(pos)>>3] & (0x80 >> ((pos) & 7)))
+
+// prediction
+#define likely(x)       __builtin_expect((x),1)
+#define unlikely(x)     __builtin_expect((x),0)
 
 #include "huffman_tbl.h"
 
@@ -24,7 +29,7 @@ static const uint32_t extension_start_code    = 0xb5010000;
 static const uint32_t sequence_end_code       = 0xb7010000;
 static const uint32_t group_start_code        = 0xb8010000;
 
-static const uint32_t default_intra_quantizer_matrix[64] = {
+static const int16_t default_intra_quantizer_matrix[64] = {
   8,
   16, 16,
   19, 16, 19,
@@ -42,7 +47,7 @@ static const uint32_t default_intra_quantizer_matrix[64] = {
   83
 };
 
-static const uint32_t default_non_intra_quantizer_matrix[64] = {
+static const int16_t default_non_intra_quantizer_matrix[64] = {
   16, 16, 16, 16, 16, 16, 16, 16,
   16, 16, 16, 16, 16, 16, 16, 16,
   16, 16, 16, 16, 16, 16, 16, 16,
@@ -53,6 +58,17 @@ static const uint32_t default_non_intra_quantizer_matrix[64] = {
   16, 16, 16, 16, 16, 16, 16, 16,
 };
 
+static const int zigzag_idx[8][8] = {
+  {  0,  1,  5,  6, 14, 15, 27, 28 },
+  {  2,  4,  7, 13, 16, 26, 29, 42 },
+  {  3,  8, 12, 17, 25, 30, 41, 43 },
+  {  9, 11, 18, 24, 31, 40, 44, 53 },
+  { 10, 19, 23, 32, 39, 45, 52, 54 },
+  { 20, 22, 33, 38, 46, 51, 55, 60 },
+  { 21, 34, 37, 47, 50, 56, 59, 61 },
+  { 35, 36, 48, 49, 57, 58, 62, 63 }
+};
+
 static const unsigned int picbuf_max = 4;
 static const unsigned int w_max = 768;
 static const unsigned int h_max = 576;
@@ -60,13 +76,121 @@ static const unsigned int w_mcroblk_max = w_max / 16;
 static const unsigned int h_mcroblk_max = h_max / 16;
 static const unsigned int mcroblk_max = w_mcroblk_max * h_mcroblk_max;
 
+inline int sgn(int m) { return (m==0)? 0 : ((m>>31)|1); }
+
+static constexpr int f4_of_double(const double& d) { return static_cast<int>(d * 16.0); }
+static constexpr int f4_of_int(const int& n) { return n << 4; }
+static constexpr int int_of_f4(const int& f) { return f >> 4; }
+static constexpr int f4mul(const int& a, const int& b) { return (a*b) >> 8; }
+
+static void slow_fast_idct1(int (&vec)[8]) {
+  static const double pif = std::acos(-1.0);
+  static const int pi = f4_of_double(pif);
+  static const int r = f4_of_double(std::sqrt(2.0));
+  static const int a = f4_of_double(std::sqrt(2.0) * std::cos(3.0 * pi / 8.0));
+  static const int b = f4_of_double(std::sqrt(2.0) * std::sin(3.0 * pi / 8.0));
+  static const int d = f4_of_double(std::cos(pi / 16.0));
+  static const int e = f4_of_double(std::sin(pi / 16.0));
+  static const int n = f4_of_double(std::cos(3.0 * pif / 16.0));
+  static const int t = f4_of_double(std::sin(3.0 * pif / 16.0));
+
+  int b7 = vec[1] - vec[7], b1 = vec[1] + vec[7],
+      b3 = f4mul(r,vec[3]), b5 = f4mul(r,vec[5]),
+
+      c0 = vec[0] + vec[4], c4 = vec[0] - vec[4];
+  int c2 = f4mul(a,vec[2]) - f4mul(b,vec[6]),
+      c6 = f4mul(a,vec[6]) + f4mul(b,vec[2]),
+      c7 = b7+b5, c3 = b1-b3, c5 = b7-b5, c1 = b1+b3;
+
+  int d0 = c0+c6, d4 = c4+c2, d2 = c4-c2, d6 = c0-c6,
+      d7 = f4mul(n,c7) - f4mul(t,c1),
+      d3 = f4mul(d,c3) - f4mul(e,c5),
+      d5 = f4mul(d,c5) + f4mul(e,c3),
+      d1 = f4mul(n,c1) + f4mul(t,c7);
+
+  vec[0] = d0+d1; vec[1] = d4+d5; vec[2] = d2+d3; vec[3] = d6+d7;
+  vec[4] = d6-d7; vec[5] = d2-d3; vec[6] = d4-d5; vec[7] = d0-d1;
+}
+
 static void slow_jpeg_decode(
   uint8_t buf[],
   video_cxt_t *video_cxt,
-  pic_cxt_t *pic_cxt,
+  pic_cxt_t *,
   mcroblk_cxt_t mcroblk_cxts[])
 {
-  
+  DEBUG_TRACE("");
+
+  const int mcroblk_cnt = video_cxt->w_mcroblk_cnt*video_cxt->h_mcroblk_cnt;
+  const int padded_width = (video_cxt->width*3+3)/4*4;
+  unsigned int mcroblk_y = 0, mcroblk_x = 0;
+  for (int t = 0; t != mcroblk_cnt; ++t) {
+    // supports only intra-coded blocks now
+    int16_t dct_recon[8*8], dct_dc_past[6];
+    int ycbcrs[6][8][8];
+    mcroblk_cxt_t &mcroblk_cxt = mcroblk_cxts[t];
+
+    for (int k = 0; k != 6; ++k) {
+      // DCT coefficient reconstruction
+      int16_t (&dct_zz)[8*8] = mcroblk_cxt.dct_zz[k];
+      int (&ycbcr)[8][8] = ycbcrs[k];
+      if (unlikely((k==0 || (k&4)) && t-mcroblk_cxt.past_intra_addr > 1)) {
+        dct_dc_past[k] = 128*8;
+      }
+      dct_recon[0] = dct_dc_past[k] + dct_zz[0]*8;
+      dct_dc_past[k] = dct_recon[0];
+      for (int i = 1; i != 64; ++i) {
+        dct_recon[i] = (2 * dct_zz[i] * mcroblk_cxt.quantizer_scale
+                          * video_cxt->intra_quantizer_matrix[i])/16;
+        if ((dct_recon[i]&1) == 0) {
+          dct_recon[i] -= sgn(dct_recon[i]);
+        }
+        if (dct_recon[i] > 2047) dct_recon[i] = 2047;
+        else if (dct_recon[i] < -2048) dct_recon[i] = -2048;
+      }
+
+      // unzigzag, transpose, and scale into fixed-point floats (4-bit precision)
+      for (int i = 0; i != 8; ++i)
+        for (int j = 0; j != 8; ++j)
+          ycbcr[i][j] = f4_of_int(dct_recon[zigzag_idx[j][i]]);
+
+      // fast IDCT
+      for (int i = 0; i != 8; ++i)
+        slow_fast_idct1(ycbcr[i]);
+      for (int i = 0; i != 8; ++i)
+        for (int j = i+1; j != 8; ++j)
+          std::swap(ycbcr[i][j], ycbcr[j][i]);
+      for (int i = 0; i != 8; ++i)
+        slow_fast_idct1(ycbcr[i]);
+      // cut negative values
+      for (int i = 0; i != 8; ++i)
+        for (int j = 0; j != 8; ++j)
+          ycbcr[i][j] = ycbcr[i][j] & (~(ycbcr[i][j] >> 31));
+    }
+
+    unsigned int y0 = mcroblk_y*16, x0 = mcroblk_x*16;
+    for (unsigned int y = 0; y != 16; ++y) {
+      for (unsigned int x = 0; x != 16; ++x) {
+        const int k = (y>>3)*2 + (x>>3);
+        static const int Ycoef = f4_of_double(255.0/219.0);
+        static const int Cbcoef = f4_of_double(255.0/112.0 * 0.886);
+        static const int Crcoef = f4_of_double(255.0/112.0 * 0.701);
+        int Y  = f4mul(Ycoef,  ycbcrs[k][y&7][x&7]   - f4_of_int(16));
+        int Cr = f4mul(Crcoef, ycbcrs[3][y>>1][x>>1] - f4_of_int(128));
+        int Cb = f4mul(Cbcoef, ycbcrs[4][y>>1][x>>1] - f4_of_int(128));
+
+        // B-G-R, bmp order
+        int pos = padded_width*(y+y0)+(x+x0);
+        buf[pos+0] = Y + Cb;
+        buf[pos+1] = Y - f4mul(f4_of_double(0.114/0.587), Cb) - f4mul(f4_of_double(0.299/0.587), Cr);
+        buf[pos+2] = Y + f4mul(f4_of_double(0.299/0.587), Cr);
+      }
+    }
+
+    if (++mcroblk_x == video_cxt->w_mcroblk_cnt) {
+      mcroblk_x = 0;
+      ++mcroblk_y;
+    }
+  }
 }
 
 class mpeg_parser {
@@ -85,6 +209,8 @@ class mpeg_parser {
   picbuf_t *F, *C, *B;
 
   // utilities
+  void debug_output(uint8_t buf[]);
+
   uint32_t peekInt(size_t pos) {
     // bad code; note that `pos` is assumed to be **byte**-aligned
     assert((pos&7) == 0);
@@ -100,7 +226,7 @@ class mpeg_parser {
   }
 
   void skipExtensionsAndUserData();
-  void load_quantizer_matrix(uint32_t (&mat)[64]);
+  void load_quantizer_matrix(int16_t (&mat)[64]);
 
   void next_start_code() {
     this->bitpos = (this->bitpos+7u)&(~7u);
@@ -128,7 +254,11 @@ public:
   void parseAll();
 };
 
-void mpeg_parser::load_quantizer_matrix(uint32_t (&mat)[64]) {
+void mpeg_parser::debug_output(uint8_t buf[]) {
+  
+}
+
+void mpeg_parser::load_quantizer_matrix(int16_t (&mat)[64]) {
   size_t shift = 8 - (this->bitpos & 7);
   for (size_t i = 0; i != 64; ++i) {
     size_t pos = this->bitpos + i*8;
@@ -156,8 +286,7 @@ bool mpeg_parser::slice() {
     this->pic_cxt.slice_vpos = m & 0xff;
   }
 
-  this->pic_cxt.quantizer_scale =
-    static_cast<uint16_t>(this->bitbuf[(this->bitpos>>3) + 4] >> 3);
+  this->pic_cxt.quantizer_scale = this->bitbuf[(this->bitpos>>3) + 4] >> 3;
 
   dprintf5("%08x slice_vpos = %u (@ %u), quantizer_scale = %u\n", this->bitpos, this->pic_cxt.slice_vpos, this->pic_cxt.slice_vpos*16, this->pic_cxt.quantizer_scale);
 
@@ -194,14 +323,13 @@ bool mpeg_parser::slice() {
         this->bitpos += huff_mcroblk_typ[this->pic_cxt.pic_cod_typ][m].len;
       }
       if (mcroblk_typ->quant) {
-        this->pic_cxt.quantizer_scale =
-          static_cast<uint16_t>(this->bitbuf[this->bitpos] >> 3);
+        this->pic_cxt.quantizer_scale = this->bitbuf[this->bitpos] >> 3;
         this->bitpos += 5;
       }
       this->mcroblk_cxts[mcroblk_addr].quantizer_scale = this->pic_cxt.quantizer_scale;
 
       for (int k = 0; k != 6; ++k) {
-        uint16_t (&dct_zz)[8*8] = this->mcroblk_cxts[mcroblk_addr].dct_zz[k];
+        int16_t (&dct_zz)[8*8] = this->mcroblk_cxts[mcroblk_addr].dct_zz[k];
         dprintf5("block %d:\n", k);
         // decode DC
         {
@@ -264,7 +392,7 @@ bool mpeg_parser::picture() {
   if (this->peekInt(this->bitpos) != picture_start_code)
     return false;
 
-#if DEBUG_LEVEL >= 5
+#if DEBUG_LEVEL >= 4
   static unsigned int pic_count = 0;
 #endif
 
@@ -273,7 +401,7 @@ bool mpeg_parser::picture() {
     this->pic_cxt.pic_cod_typ = m >> (32 - 10 - 3)&7;
     this->pic_cxt.temporal_ref = m >> (32 - 10)&1023;
 
-    dprintf5("%08x pic %4u: type = %u, temporal = %u\n", this->bitpos, pic_count, this->pic_cxt.pic_cod_typ, this->pic_cxt.temporal_ref);
+    dprintf4("%08x pic %4u: type = %u, temporal = %u\n", this->bitpos, pic_count, this->pic_cxt.pic_cod_typ, this->pic_cxt.temporal_ref);
   }
 
   if (this->pic_cxt.pic_cod_typ<1 || this->pic_cxt.pic_cod_typ>3) {
@@ -317,6 +445,7 @@ bool mpeg_parser::picture() {
   if (this->pic_cxt.pic_cod_typ != 3) { // I frame or P frame
     std::swap(this->F, this->B);
     // XXX TODO: display this->F
+    this->debug_output(this->F->rgb);
     static bool end = false;
     if (end) throw std::runtime_error("USER REQUEST TERMINATION");
     else     end = true;
@@ -328,7 +457,7 @@ bool mpeg_parser::picture() {
     bool success = this->slice();
     if (not success) break;
   }
-  // XXX TODO: picture decoding (to this->C)
+
   slow_jpeg_decode(
     this->C->rgb,
     &this->video_cxt,
@@ -342,7 +471,7 @@ bool mpeg_parser::picture() {
     std::swap(this->C, this->B);
   }
 
-#if DEBUG_LEVEL >= 5
+#if DEBUG_LEVEL >= 4
   ++pic_count;
 #endif
 

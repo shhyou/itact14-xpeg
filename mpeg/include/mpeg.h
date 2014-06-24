@@ -5,8 +5,8 @@
 struct video_cxt_t {
   int width;
   int height;
-  std::uint32_t intra_quantizer_matrix[64];
-  std::uint32_t non_intra_quantizer_matrix[64];
+  std::int16_t intra_quantizer_matrix[64];
+  std::int16_t non_intra_quantizer_matrix[64];
   std::uint32_t time_code;
 
   int w_mcroblk_cnt;
@@ -30,11 +30,12 @@ struct pic_cxt_t {
 
   // slice data
   unsigned int slice_vpos;
-  uint16_t quantizer_scale;
+  std::int16_t quantizer_scale;
 };
 
 struct mcroblk_cxt_t {
-  unsigned int mcroblk_addr __attribute__ ((aligned(32)));
-  std::uint16_t quantizer_scale  __attribute__ ((aligned(32)));
-  std::uint16_t dct_zz[6][8*8]   __attribute__ ((aligned(32)));
+  int flags                      __attribute__ ((aligned(32)));
+  int past_intra_addr            __attribute__ ((aligned(32)));
+  std::int16_t quantizer_scale  __attribute__ ((aligned(32)));
+  std::int16_t dct_zz[6][8*8]   __attribute__ ((aligned(32)));
 };
