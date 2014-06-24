@@ -547,6 +547,9 @@ bool mpeg_parser::picture() {
   }
 
   std::memset(this->mcroblk_cxts, 0, sizeof(this->mcroblk_cxts));
+  if (this->pic_cxt.pic_cod_typ == 1) {
+    std::memset(this->C, 0, sizeof(picbuf_t));
+  }
   // slices
   for (;;) {
     bool success = this->slice();
