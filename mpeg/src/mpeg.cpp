@@ -220,7 +220,7 @@ static void slow_jpeg_decode(
 
 #if DEBUG_LEVEL >= 5
     if (t == 0) {
-      printf("\nRGB\n");
+      printf("\n(%d,%d) RGB\n", mcroblk_y, mcroblk_x);
       for (int y = 0; y != 16; ++y) {
         for (int x = 0; x != 16; ++x) {
           int pos = padded_width*(y+mcroblk_y*16)+(x+mcroblk_x*16);
@@ -404,7 +404,7 @@ bool mpeg_parser::slice() {
             dprintf5("   dc_len=0\n");
           } else {
             int dc_diff = this->peekInt_be(this->bitpos&(~7u)) << (this->bitpos&7);
-            int msk = dc_diff >> 31;
+            int msk = ~(dc_diff >> 31);
             dct_zz[0] = ((1<<dc_len)^msk) + (2&msk) + (dc_diff>>(32-dc_len));
             dprintf5("   dc_len=%d, diff=%d\n", dc_len, ((unsigned)dc_diff)>>(32-dc_len));
           }
@@ -523,7 +523,7 @@ bool mpeg_parser::picture() {
     this->debug_output(this->F->rgb);
 #if 1
     static int ___cnt = 0;
-    if (___cnt >= 10)
+    if (___cnt >= DEBUG_CNT)
       throw std::runtime_error("USER REQUEST TERMINATION");
     else
       ++___cnt;

@@ -1,6 +1,6 @@
 -include Makefile.common
 
-CXXFLAGS = -std=c++11 -MMD -g -DDEBUG_LEVEL=5 -Wall -Wshadow -Wextra -Wconversion -pedantic -Iinclude
+CXXFLAGS = -std=c++11 -MMD -g -DDEBUG_LEVEL=4 -DDEBUG_CNT=10 -Wall -Wshadow -Wextra -Wconversion -pedantic -Iinclude
 #CXXFLAGS = -std=c++11 -MMD -O2 -DDEBUG_LEVEL=0 -Wall -Wshadow -Wextra -Wconversion -pedantic -Iinclude
 CXX = g++
 
