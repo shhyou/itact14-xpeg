@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstring>
+#include <cassert>
 
 int operator "" _b16(const char *s) {
   int m = 0, msk = 0x8000;
@@ -14,6 +15,7 @@ int operator "" _b16(const char *s) {
 }
 
 int operator "" _len(const char *s) {
+  assert(std::strlen(s) <= 16);
   return std::strlen(s);
 }
 
@@ -307,6 +309,7 @@ static void init_huff_dc_coef() {
       int run = inits[k].init[i][2];
       int lvl = inits[k].init[i][3];
       for (int j = 0; j != (1<<(16-len)); ++j) {
+        assert((bit&j)==0 && 0<=(bit|j) && (bit|j)<65536);
         inits[k].dest[bit|j][0] = len;
         inits[k].dest[bit|j][1] = run;
         inits[k].dest[bit|j][2] = lvl;

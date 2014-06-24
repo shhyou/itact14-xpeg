@@ -112,9 +112,11 @@ static void slow_fast_idct1(int (&vec)[8]) {
   vec[4] = d6-d7; vec[5] = d2-d3; vec[6] = d4-d5; vec[7] = d0-d1;
 }
 
-static constexpr uint8_t cut255(int x) {
-  return (x>255? 255 : (x<0? 0 : x));
-}
+static constexpr uint8_t cut255(int x) { return (x>255? 255 : (x<0? 0 : x)); }
+
+#if DEBUG_LEVEL >= 4
+  unsigned int pic_count = 0;
+#endif
 
 static void slow_jpeg_decode(
   uint8_t buf[],
@@ -127,6 +129,10 @@ static void slow_jpeg_decode(
   const int mcroblk_cnt = video_cxt->w_mcroblk_cnt*video_cxt->h_mcroblk_cnt;
   const int padded_width = (video_cxt->width*3+3)/4*4;
   unsigned int mcroblk_y = 0, mcroblk_x = 0;
+
+#if DEBUG_LEVEL >= 5
+  printf("pic_count=%d\n",pic_count);
+#endif
 
   for (int t = 0; t != mcroblk_cnt; ++t) {
     // supports only intra-coded blocks now
@@ -170,7 +176,7 @@ static void slow_jpeg_decode(
         slow_fast_idct1(ycbcr[i]);
       for (int i = 0; i != 8; ++i)
         for (int j = 0; j != 8; ++j)
-          ycbcr[i][j] = ycbcr[i][j] >> 3;
+          ycbcr[i][j] = ycbcr[i][j] / 8;
       // cut negative values
       for (int i = 0; i != 8; ++i) {
         for (int j = 0; j != 8; ++j) {
@@ -179,15 +185,15 @@ static void slow_jpeg_decode(
       }
 
 #if DEBUG_LEVEL >= 5
-      if (t == 0) {
-        printf("\nk=%d dct_recon\n", k);
+      if (t <= 10 && pic_count == 3) {
+        printf("\nt =%2d k=%d dct_recon\n", t, k);
         for (int i = 0; i < 8; ++i) {
           for (int j = 0; j < 8; ++j) {
             printf(" %4d", dct_recon[i*8+j]);
           }
           puts("");
         }
-        printf("k=%d ycbcr\n", k);
+        printf("t =%2d k=%d ycbcr\n", t, k);
         for (int i = 0; i < 8; ++i) {
           for (int j = 0; j < 8; ++j) {
             printf(" %8.2f", ycbcr[i][j]/16.0);
@@ -228,8 +234,8 @@ static void slow_jpeg_decode(
     }
 
 #if DEBUG_LEVEL >= 5
-    if (t == 0) {
-      printf("\n(%d,%d) RGB\n", mcroblk_y, mcroblk_x);
+    if (t <= 10 && pic_count == 3) {
+      printf("\nt = %2d (%d,%d) RGB\n", t, mcroblk_y, mcroblk_x);
       for (int y = 0; y != 16; ++y) {
         for (int x = 0; x != 16; ++x) {
           int pos = padded_width*(video_cxt->height-y-mcroblk_y*16)+(x+mcroblk_x*16)*3;
@@ -275,7 +281,7 @@ class mpeg_parser {
 
   uint32_t peek16(size_t pos) {
     size_t b = pos >> 3;
-    uint32_t m = (this->bitbuf[b]<<16) | (this->bitbuf[b+1]<<8) | this->bitbuf[b];
+    uint32_t m = (this->bitbuf[b]<<16) | (this->bitbuf[b+1]<<8) | this->bitbuf[b+2];
     return (m >> (8 - (pos & 7))) & 0xffff;
   }
 
@@ -399,9 +405,10 @@ bool mpeg_parser::slice() {
       past_intra_addr = mcroblk_addr;
       this->mcroblk_cxts[mcroblk_addr].quantizer_scale = this->pic_cxt.quantizer_scale;
 
+      dprintf5("macroblock %d:\n", mcroblk_addr);
       for (int k = 0; k != 6; ++k) {
         int16_t (&dct_zz)[8*8] = this->mcroblk_cxts[mcroblk_addr].dct_zz[k];
-        dprintf5("block %d:\n", k);
+        dprintf5("   block %d:\n", k);
         // decode DC
         {
           uint32_t m = this->peek16(this->bitpos);
@@ -410,12 +417,12 @@ bool mpeg_parser::slice() {
           this->bitpos += len;
           if (dc_len == 0) {
             dct_zz[0] = 0;
-            dprintf5("   dc_len=0\n");
+            dprintf5("      dc_len=0\n");
           } else {
             int dc_diff = this->peekInt_be(this->bitpos&(~7u)) << (this->bitpos&7);
             int msk = ~(dc_diff >> 31);
             dct_zz[0] = ((1<<dc_len)^msk) + (2&msk) + (dc_diff>>(32-dc_len));
-            dprintf5("   dc_len=%d, diff=%d\n", dc_len, ((unsigned)dc_diff)>>(32-dc_len));
+            dprintf5("      dc_len=%d, diff=%d\n", dc_len, ((unsigned)dc_diff)>>(32-dc_len));
           }
           this->bitpos += dc_len;
         }
@@ -451,7 +458,7 @@ bool mpeg_parser::slice() {
             this->bitpos += len;
             i += run + 1;
             dct_zz[i] = level;
-            dprintf5("   coef_next: run=%d, level=%d\n", run, level);
+            dprintf5("      coef_next: run=%d, level=%d; m=%04x\n", run, level, m);
           }
         }
       }
@@ -475,10 +482,6 @@ bool mpeg_parser::picture() {
 
   if (this->peekInt(this->bitpos) != picture_start_code)
     return false;
-
-#if DEBUG_LEVEL >= 4
-  static unsigned int pic_count = 0;
-#endif
 
   {
     uint32_t m = this->peekInt_be(this->bitpos+32);
