@@ -162,7 +162,7 @@ static void init_huff_ssss() {
     { { huff_dc_ssss_Y, huff_dc_ssss_Y_init },
       { huff_dc_ssss_CbCr, huff_dc_ssss_CbCr_init } };
   for (int k = 0; k != 2; ++k) {
-    for (int i = 0; i != 8; ++i) {
+    for (int i = 0; i != 9; ++i) {
       int bit = inits[k].init[i][0];
       int len = inits[k].init[i][1];
       int val = inits[k].init[i][2];

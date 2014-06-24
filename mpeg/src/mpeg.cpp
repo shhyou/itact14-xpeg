@@ -460,8 +460,8 @@ bool mpeg_parser::slice() {
             }
             this->bitpos += len;
             i += run + 1;
-            dct_zz[i] = level;
             assert(i <= 63);
+            dct_zz[i] = level;
             dprintf5("      coef_next: run=%d, level=%d; m=%04x\n", run, level, m);
           }
         }
