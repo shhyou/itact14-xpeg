@@ -134,9 +134,10 @@ static void slow_jpeg_decode(
   printf("pic_count=%d\n",pic_count);
 #endif
 
+  int16_t dct_dc_past[6] = {128*8,0,0,0,128*8,128*8}; // should need no init though
   for (int t = 0; t != mcroblk_cnt; ++t) {
     // supports only intra-coded blocks now
-    int16_t dct_recon[8*8], dct_dc_past[6];
+    int16_t dct_recon[8*8];
     int ycbcrs[6][8][8];
     mcroblk_cxt_t &mcroblk_cxt = mcroblk_cxts[t];
     assert(mcroblk_cxt.past_intra_addr==-2 || mcroblk_cxt.past_intra_addr==t-1);
@@ -149,7 +150,7 @@ static void slow_jpeg_decode(
         dct_dc_past[k] = 128*8;
       }
       dct_recon[0] = dct_dc_past[(k&4)|(k&(k>>2))] + dct_zz[0]*8;
-      dct_dc_past[k] = dct_recon[0];
+      dct_dc_past[(k&4)|(k&(k>>2))] = dct_recon[0];
       for (int i = 1; i != 64; ++i) {
         dct_recon[i] = (2 * dct_zz[i] * static_cast<int>(mcroblk_cxt.quantizer_scale)
                           * video_cxt->intra_quantizer_matrix[i])/16;
