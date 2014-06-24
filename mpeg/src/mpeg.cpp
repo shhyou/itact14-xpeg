@@ -425,7 +425,7 @@ bool mpeg_parser::slice() {
               int m_ = this->peek16(this->bitpos+12);
               int msk = ((m << 16) >> 31) & 0xffffff00;
               if (m_ & 0x7f00) {
-                level = msk | (m >> 4);
+                level = msk | (m >> 8);
                 len = 6 + 6 + 8;
               } else {
                 level = msk | m;
