@@ -1,6 +1,7 @@
 #include "debugutils.h"
 #include "input_stream.h"
 
+#include <ctime>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -28,9 +29,13 @@ input_stream_t::~input_stream_t() {
 }
 
 void input_stream_t::advance() {
+  DEBUG_TRACE("");
+
   static const size_t delta = is_buf_siz - is_buf_lim;
   if (this->pos < is_buf_lim*8)
     return;
+
+  dprintf3("[i] input_stream_t::advance(): advance; pos=%08x (=> %x)\n", this->pos, this->pos/8);
   std::memcpy(this->buf, this->buf+is_buf_lim, delta);
   std::size_t rd = std::fread(this->buf+delta, 1, is_buf_siz-delta, this->fp);
   this->pos -= is_buf_lim*8;

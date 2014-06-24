@@ -415,23 +415,36 @@ bool mpeg_parser::slice() {
         for (;;) {
           uint32_t m = this->peek16(this->bitpos);
           if ((m&0xc000) == 0x8000) { // EOB = '10'
+            this->bitpos += 2;
             break;
-          } else if ((m&0xfc00) == 0x0400) { // escape = '0000 01'
-            // XXX TOOD: decode escape codes
-            throw std::logic_error("escape code not implemented");
           } else {
-            int len = huff_dc_coef_next[m][0];
-            int run = huff_dc_coef_next[m][1];
-            int level = huff_dc_coef_next[m][2];
-            if (TEST_BIT(this->bitbuf, this->bitpos+len))
-              level = -level;
-            this->bitpos += len+1;
+            int len, run, level;
+            if ((m&0xfc00) == 0x0400) { // escape = '0000 01'
+              //this->bitpos += 6;
+              run = this->peek16(this->bitpos+6) >> (16 - 6);
+              int m_ = this->peek16(this->bitpos+12);
+              int msk = ((m << 16) >> 31) & 0xffffff00;
+              if (m_ & 0x7f00) {
+                level = msk | (m >> 4);
+                len = 6 + 6 + 8;
+              } else {
+                level = msk | m;
+                len = 6 + 6 + 16;
+              }
+            } else {
+              len = huff_dc_coef_next[m][0];
+              run = huff_dc_coef_next[m][1];
+              level = huff_dc_coef_next[m][2];
+              if (TEST_BIT(this->bitbuf, this->bitpos+len))
+                level = -level;
+              ++this->bitpos;
+            }
+            this->bitpos += len;
             i += run + 1;
             dct_zz[i] = level;
             dprintf5("   coef_next: run=%d, level=%d\n", run, level);
           }
         }
-        this->bitpos += 2;
       }
     }
     this->next_start_code();
@@ -508,10 +521,12 @@ bool mpeg_parser::picture() {
     std::swap(this->F, this->B);
     // XXX TODO: display this->F
     this->debug_output(this->F->rgb);
-#if 0
-    static bool end = false;
-    if (end) throw std::runtime_error("USER REQUEST TERMINATION");
-    else     end = true;
+#if 1
+    static int ___cnt = 0;
+    if (___cnt >= 10)
+      throw std::runtime_error("USER REQUEST TERMINATION");
+    else
+      ++___cnt;
 #endif
   }
 
