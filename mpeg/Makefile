@@ -5,6 +5,7 @@ CXXFLAGS = -std=c++11 -MMD -g -DDEBUG_LEVEL=5 -Wall -Wshadow -Wextra -Wconversio
 CXX = g++
 
 OBJS = \
+	bin/bmp \
 	bin/input_stream \
 	bin/mpeg
 

@@ -1,6 +1,7 @@
 #include "debugutils.h"
 #include "mpeg.h"
 #include "input_stream.h"
+#include "bmp.h"
 
 #include <ctime>
 #include <cmath>
@@ -255,7 +256,19 @@ public:
 };
 
 void mpeg_parser::debug_output(uint8_t buf[]) {
-  
+  DEBUG_TRACE("");
+
+  static int pic_cnt = 0;
+  static bmp_t bmp;
+  static_assert(sizeof(picbuf_t) <= sizeof(bmp.pixels), "bmp_t pixel buffer size too small");
+
+  create_bmp(this->video_cxt.height, this->video_cxt.width, &bmp);
+  std::memcpy(bmp.pixels, buf, sizeof(picbuf_t));
+
+  char filename[128];
+  std::sprintf(filename, "bin\\pic%04d.bmp", pic_cnt);
+  output_bmp(filename, &bmp);
+  ++pic_cnt;
 }
 
 void mpeg_parser::load_quantizer_matrix(int16_t (&mat)[64]) {
