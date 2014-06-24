@@ -81,19 +81,18 @@ inline int sgn(int m) { return (m==0)? 0 : ((m>>31)|1); }
 
 static constexpr int f4_of_double(const double& d) { return static_cast<int>(d * 16.0); }
 static constexpr int f4_of_int(const int& n) { return n << 4; }
-static constexpr int int_of_f4(const int& f) { return f >> 4; }
-static constexpr int f4mul(const int& a, const int& b) { return (a*b) >> 4; }
+static constexpr int int_of_f4(const int& f) { return f / 16; }
+static constexpr int f4mul(const int& a, const int& b) { return (a*b) / 16; }
 
 static void slow_fast_idct1(int (&vec)[8]) {
-  static const double pif = std::acos(-1.0);
-  static const int pi = f4_of_double(pif);
+  static const double pi = std::acos(-1.0);
   static const int r = f4_of_double(std::sqrt(2.0));
   static const int a = f4_of_double(std::sqrt(2.0) * std::cos(3.0 * pi / 8.0));
   static const int b = f4_of_double(std::sqrt(2.0) * std::sin(3.0 * pi / 8.0));
   static const int d = f4_of_double(std::cos(pi / 16.0));
   static const int e = f4_of_double(std::sin(pi / 16.0));
-  static const int n = f4_of_double(std::cos(3.0 * pif / 16.0));
-  static const int t = f4_of_double(std::sin(3.0 * pif / 16.0));
+  static const int n = f4_of_double(std::cos(3.0 * pi / 16.0));
+  static const int t = f4_of_double(std::sin(3.0 * pi / 16.0));
 
   int b7 = vec[1] - vec[7], b1 = vec[1] + vec[7],
       b3 = f4mul(r,vec[3]), b5 = f4mul(r,vec[5]),
@@ -175,7 +174,7 @@ static void slow_jpeg_decode(
       // cut negative values
       for (int i = 0; i != 8; ++i) {
         for (int j = 0; j != 8; ++j) {
-          ycbcr[i][j] = ycbcr[i][j] & (~(ycbcr[i][j] >> 31));
+          ycbcr[i][j] = ycbcr[i][j] & (~(ycbcr[i][j]>>31));
         }
       }
 
@@ -203,18 +202,28 @@ static void slow_jpeg_decode(
     for (unsigned int y = 0; y != 16; ++y) {
       for (unsigned int x = 0; x != 16; ++x) {
         const int k = (y>>3)*2 + (x>>3);
-        static const int Ycoef = f4_of_double(255.0/219.0);
-        static const int Cbcoef = f4_of_double(255.0/112.0 * 0.886);
-        static const int Crcoef = f4_of_double(255.0/112.0 * 0.701);
-        int Y  = f4mul(Ycoef,  ycbcrs[k][y&7][x&7]   - f4_of_int(16));
-        int Cr = f4mul(Crcoef, ycbcrs[4][y>>1][x>>1] - f4_of_int(128));
-        int Cb = f4mul(Cbcoef, ycbcrs[5][y>>1][x>>1] - f4_of_int(128));
+        int Y  = ycbcrs[k][y&7][x&7];
+        int Cr = ycbcrs[4][y>>1][x>>1];
+        int Cb = ycbcrs[5][y>>1][x>>1];
+
+        static const int c298082 = f4_of_double(298.082);
+        static const int c408583 = f4_of_double(408.583);
+        static const int c222921 = f4_of_double(222.921);
+        static const int c100291 = f4_of_double(100.291);
+        static const int c208120 = f4_of_double(208.120);
+        static const int c135576 = f4_of_double(135.576);
+        static const int c516412 = f4_of_double(516.412);
+        static const int c276836 = f4_of_double(276.836);
+
+        int r = f4mul(c298082,Y)/256                         + f4mul(c408583,Cr)/256 - c222921;
+        int g = f4mul(c298082,Y)/256 - f4mul(c100291,Cb)/256 - f4mul(c208120,Cr)/256 + c135576;
+        int b = f4mul(c298082,Y)/256 + f4mul(c516412,Cb)/256                         - c276836;
 
         // B-G-R, bmp order
-        int pos = padded_width*(y+y0)+(x+x0);
-        buf[pos+0] = cut255(int_of_f4(Y + Cb));
-        buf[pos+1] = cut255(int_of_f4(Y - f4mul(f4_of_double(0.114/0.587), Cb) - f4mul(f4_of_double(0.299/0.587), Cr)));
-        buf[pos+2] = cut255(int_of_f4(Y + f4mul(f4_of_double(0.299/0.587), Cr)));
+        int pos = padded_width*(y+y0)+(x+x0)*3;
+        buf[pos+0] = cut255(int_of_f4(b));
+        buf[pos+1] = cut255(int_of_f4(g));
+        buf[pos+2] = cut255(int_of_f4(r));
       }
     }
 
