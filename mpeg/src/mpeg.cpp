@@ -220,7 +220,7 @@ static void slow_jpeg_decode(
         int b = f4mul(c298082,Y)/256 + f4mul(c516412,Cb)/256                         - c276836;
 
         // B-G-R, bmp order
-        int pos = padded_width*(y+y0)+(x+x0)*3;
+        int pos = padded_width*(video_cxt->height-y-y0)+(x+x0)*3;
         buf[pos+0] = cut255(int_of_f4(b));
         buf[pos+1] = cut255(int_of_f4(g));
         buf[pos+2] = cut255(int_of_f4(r));
@@ -232,7 +232,7 @@ static void slow_jpeg_decode(
       printf("\n(%d,%d) RGB\n", mcroblk_y, mcroblk_x);
       for (int y = 0; y != 16; ++y) {
         for (int x = 0; x != 16; ++x) {
-          int pos = padded_width*(y+mcroblk_y*16)+(x+mcroblk_x*16);
+          int pos = padded_width*(video_cxt->height-y-mcroblk_y*16)+(x+mcroblk_x*16)*3;
           printf(" %02x%02x%02x", buf[pos+2], buf[pos+1], buf[pos+0]);
         }
         puts("");
