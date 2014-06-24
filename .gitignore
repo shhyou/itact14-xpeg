@@ -1,5 +1,7 @@
 *.cmi
 *.cmo
 *.exe
+*.dll
+*.o
 *~
 
