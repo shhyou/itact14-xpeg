@@ -139,6 +139,7 @@ static void slow_jpeg_decode(
     int16_t dct_recon[8*8], dct_dc_past[6];
     int ycbcrs[6][8][8];
     mcroblk_cxt_t &mcroblk_cxt = mcroblk_cxts[t];
+    assert(mcroblk_cxt.past_intra_addr==-2 || mcroblk_cxt.past_intra_addr==t-1);
 
     for (int k = 0; k != 6; ++k) {
       // DCT coefficient reconstruction
@@ -150,7 +151,7 @@ static void slow_jpeg_decode(
       dct_recon[0] = dct_dc_past[(k&4)|(k&(k>>2))] + dct_zz[0]*8;
       dct_dc_past[k] = dct_recon[0];
       for (int i = 1; i != 64; ++i) {
-        dct_recon[i] = (2 * dct_zz[i] * mcroblk_cxt.quantizer_scale
+        dct_recon[i] = (2 * dct_zz[i] * static_cast<int>(mcroblk_cxt.quantizer_scale)
                           * video_cxt->intra_quantizer_matrix[i])/16;
         if ((dct_recon[i]&1) == 0) {
           dct_recon[i] -= sgn(dct_recon[i]);
@@ -185,7 +186,7 @@ static void slow_jpeg_decode(
       }
 
 #if DEBUG_LEVEL >= 5
-      if (t <= 10 && pic_count == 3) {
+      if (t == 100 && pic_count == 3) {
         printf("\nt =%2d k=%d dct_recon\n", t, k);
         for (int i = 0; i < 8; ++i) {
           for (int j = 0; j < 8; ++j) {
@@ -209,8 +210,8 @@ static void slow_jpeg_decode(
       for (unsigned int x = 0; x != 16; ++x) {
         const int k = (y>>3)*2 + (x>>3);
         int Y  = ycbcrs[k][y&7][x&7];
-        int Cr = ycbcrs[4][y>>1][x>>1];
-        int Cb = ycbcrs[5][y>>1][x>>1];
+        int Cb = ycbcrs[4][y>>1][x>>1];
+        int Cr = ycbcrs[5][y>>1][x>>1];
 
         static const int c298082 = f4_of_double(298.082);
         static const int c408583 = f4_of_double(408.583);
@@ -227,15 +228,15 @@ static void slow_jpeg_decode(
 
         // B-G-R, bmp order
         int pos = padded_width*(video_cxt->height-y-y0)+(x+x0)*3;
-        buf[pos+0] = cut255(int_of_f4(b));
-        buf[pos+1] = cut255(int_of_f4(g));
-        buf[pos+2] = cut255(int_of_f4(r));
+        buf[pos+0] += cut255(int_of_f4(b));
+        buf[pos+1] += cut255(int_of_f4(g));
+        buf[pos+2] += cut255(int_of_f4(r));
       }
     }
 
 #if DEBUG_LEVEL >= 5
-    if (t <= 10 && pic_count == 3) {
-      printf("\nt = %2d (%d,%d) RGB\n", t, mcroblk_y, mcroblk_x);
+    if (t == 100 && pic_count == 3) {
+      printf("\nt = %2d (%d,%d) RGB quant=%d\n", t, mcroblk_y, mcroblk_x, mcroblk_cxts[t].quantizer_scale);
       for (int y = 0; y != 16; ++y) {
         for (int x = 0; x != 16; ++x) {
           int pos = padded_width*(video_cxt->height-y-mcroblk_y*16)+(x+mcroblk_x*16)*3;
@@ -360,6 +361,7 @@ bool mpeg_parser::slice() {
     this->pic_cxt.slice_vpos = m & 0xff;
   }
 
+  // note: this is *correct* since it is always aligned
   this->pic_cxt.quantizer_scale = this->bitbuf[(this->bitpos>>3) + 4] >> 3;
 
   dprintf5("%08x slice_vpos = %u (@ %u), quantizer_scale = %u\n", this->bitpos, this->pic_cxt.slice_vpos, this->pic_cxt.slice_vpos*16, this->pic_cxt.quantizer_scale);
@@ -398,14 +400,14 @@ bool mpeg_parser::slice() {
         this->bitpos += huff_mcroblk_typ[this->pic_cxt.pic_cod_typ][m].len;
       }
       if (mcroblk_typ->quant) {
-        this->pic_cxt.quantizer_scale = this->bitbuf[this->bitpos] >> 3;
+        this->pic_cxt.quantizer_scale = (this->peek16(this->bitpos)>>11)&31;
         this->bitpos += 5;
       }
       this->mcroblk_cxts[mcroblk_addr].past_intra_addr = past_intra_addr;
       past_intra_addr = mcroblk_addr;
       this->mcroblk_cxts[mcroblk_addr].quantizer_scale = this->pic_cxt.quantizer_scale;
 
-      dprintf5("macroblock %d:\n", mcroblk_addr);
+      dprintf5("macroblock %d; quantizer_scale: %d\n", mcroblk_addr, this->mcroblk_cxts[mcroblk_addr].quantizer_scale);
       for (int k = 0; k != 6; ++k) {
         int16_t (&dct_zz)[8*8] = this->mcroblk_cxts[mcroblk_addr].dct_zz[k];
         dprintf5("   block %d:\n", k);
@@ -439,7 +441,7 @@ bool mpeg_parser::slice() {
               //this->bitpos += 6;
               run = this->peek16(this->bitpos+6) >> (16 - 6);
               int m_ = this->peek16(this->bitpos+12);
-              int msk = ((m << 16) >> 31) & 0xffffff00;
+              int msk = ((m_ << 16) >> 31) & 0xffffff00;
               if (m_ & 0x7f00) {
                 level = msk | (m_ >> 8);
                 len = 6 + 6 + 8;
@@ -453,11 +455,12 @@ bool mpeg_parser::slice() {
               level = huff_dc_coef_next[m][2];
               if (TEST_BIT(this->bitbuf, this->bitpos+len))
                 level = -level;
-              ++this->bitpos;
+              ++len;
             }
             this->bitpos += len;
             i += run + 1;
             dct_zz[i] = level;
+            assert(i <= 63);
             dprintf5("      coef_next: run=%d, level=%d; m=%04x\n", run, level, m);
           }
         }
