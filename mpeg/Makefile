@@ -18,6 +18,10 @@ all: $(TARGET)
 clean:
 	-$(RM) $(TARGET) $(call fixpath,bin/*)
 
+.PHONY: test
+test: $(TARGET)
+	mpeg 2>log.txt
+
 # Compile the target file (e.g. hw3_1.exe)
 $(TARGET): %$(exe): bin/%.o $(OBJS:=.o)
 	$(CXX) $(CXXFLAGS) -o $@ $^

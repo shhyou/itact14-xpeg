@@ -34,8 +34,8 @@ struct pic_cxt_t {
 };
 
 struct mcroblk_cxt_t {
-  int flags                      __attribute__ ((aligned(32)));
-  int past_intra_addr            __attribute__ ((aligned(32)));
+  int flags                     __attribute__ ((aligned(32)));
+  int past_intra_addr           __attribute__ ((aligned(32)));
   std::int16_t quantizer_scale  __attribute__ ((aligned(32)));
   std::int16_t dct_zz[6][8*8]   __attribute__ ((aligned(32)));
 };

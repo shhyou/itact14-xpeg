@@ -82,7 +82,7 @@ inline int sgn(int m) { return (m==0)? 0 : ((m>>31)|1); }
 static constexpr int f4_of_double(const double& d) { return static_cast<int>(d * 16.0); }
 static constexpr int f4_of_int(const int& n) { return n << 4; }
 static constexpr int int_of_f4(const int& f) { return f >> 4; }
-static constexpr int f4mul(const int& a, const int& b) { return (a*b) >> 8; }
+static constexpr int f4mul(const int& a, const int& b) { return (a*b) >> 4; }
 
 static void slow_fast_idct1(int (&vec)[8]) {
   static const double pif = std::acos(-1.0);
@@ -113,6 +113,10 @@ static void slow_fast_idct1(int (&vec)[8]) {
   vec[4] = d6-d7; vec[5] = d2-d3; vec[6] = d4-d5; vec[7] = d0-d1;
 }
 
+static constexpr uint8_t cut255(int x) {
+  return (x>255? 255 : (x<0? 0 : x));
+}
+
 static void slow_jpeg_decode(
   uint8_t buf[],
   video_cxt_t *video_cxt,
@@ -124,6 +128,7 @@ static void slow_jpeg_decode(
   const int mcroblk_cnt = video_cxt->w_mcroblk_cnt*video_cxt->h_mcroblk_cnt;
   const int padded_width = (video_cxt->width*3+3)/4*4;
   unsigned int mcroblk_y = 0, mcroblk_x = 0;
+
   for (int t = 0; t != mcroblk_cnt; ++t) {
     // supports only intra-coded blocks now
     int16_t dct_recon[8*8], dct_dc_past[6];
@@ -137,7 +142,7 @@ static void slow_jpeg_decode(
       if (unlikely((k==0 || (k&4)) && t-mcroblk_cxt.past_intra_addr > 1)) {
         dct_dc_past[k] = 128*8;
       }
-      dct_recon[0] = dct_dc_past[k] + dct_zz[0]*8;
+      dct_recon[0] = dct_dc_past[(k&4)|(k&(k>>2))] + dct_zz[0]*8;
       dct_dc_past[k] = dct_recon[0];
       for (int i = 1; i != 64; ++i) {
         dct_recon[i] = (2 * dct_zz[i] * mcroblk_cxt.quantizer_scale
@@ -145,6 +150,8 @@ static void slow_jpeg_decode(
         if ((dct_recon[i]&1) == 0) {
           dct_recon[i] -= sgn(dct_recon[i]);
         }
+      }
+      for (int i = 0; i != 64; ++i) {
         if (dct_recon[i] > 2047) dct_recon[i] = 2047;
         else if (dct_recon[i] < -2048) dct_recon[i] = -2048;
       }
@@ -162,10 +169,34 @@ static void slow_jpeg_decode(
           std::swap(ycbcr[i][j], ycbcr[j][i]);
       for (int i = 0; i != 8; ++i)
         slow_fast_idct1(ycbcr[i]);
-      // cut negative values
       for (int i = 0; i != 8; ++i)
         for (int j = 0; j != 8; ++j)
+          ycbcr[i][j] = ycbcr[i][j] >> 3;
+      // cut negative values
+      for (int i = 0; i != 8; ++i) {
+        for (int j = 0; j != 8; ++j) {
           ycbcr[i][j] = ycbcr[i][j] & (~(ycbcr[i][j] >> 31));
+        }
+      }
+
+#if DEBUG_LEVEL >= 5
+      if (t == 0) {
+        printf("\nk=%d dct_recon\n", k);
+        for (int i = 0; i < 8; ++i) {
+          for (int j = 0; j < 8; ++j) {
+            printf(" %4d", dct_recon[i*8+j]);
+          }
+          puts("");
+        }
+        printf("k=%d ycbcr\n", k);
+        for (int i = 0; i < 8; ++i) {
+          for (int j = 0; j < 8; ++j) {
+            printf(" %8.2f", ycbcr[i][j]/16.0);
+          }
+          puts("");
+        }
+      }
+#endif
     }
 
     unsigned int y0 = mcroblk_y*16, x0 = mcroblk_x*16;
@@ -176,16 +207,29 @@ static void slow_jpeg_decode(
         static const int Cbcoef = f4_of_double(255.0/112.0 * 0.886);
         static const int Crcoef = f4_of_double(255.0/112.0 * 0.701);
         int Y  = f4mul(Ycoef,  ycbcrs[k][y&7][x&7]   - f4_of_int(16));
-        int Cr = f4mul(Crcoef, ycbcrs[3][y>>1][x>>1] - f4_of_int(128));
-        int Cb = f4mul(Cbcoef, ycbcrs[4][y>>1][x>>1] - f4_of_int(128));
+        int Cr = f4mul(Crcoef, ycbcrs[4][y>>1][x>>1] - f4_of_int(128));
+        int Cb = f4mul(Cbcoef, ycbcrs[5][y>>1][x>>1] - f4_of_int(128));
 
         // B-G-R, bmp order
         int pos = padded_width*(y+y0)+(x+x0);
-        buf[pos+0] = Y + Cb;
-        buf[pos+1] = Y - f4mul(f4_of_double(0.114/0.587), Cb) - f4mul(f4_of_double(0.299/0.587), Cr);
-        buf[pos+2] = Y + f4mul(f4_of_double(0.299/0.587), Cr);
+        buf[pos+0] = cut255(int_of_f4(Y + Cb));
+        buf[pos+1] = cut255(int_of_f4(Y - f4mul(f4_of_double(0.114/0.587), Cb) - f4mul(f4_of_double(0.299/0.587), Cr)));
+        buf[pos+2] = cut255(int_of_f4(Y + f4mul(f4_of_double(0.299/0.587), Cr)));
       }
     }
+
+#if DEBUG_LEVEL >= 5
+    if (t == 0) {
+      printf("\nRGB\n");
+      for (int y = 0; y != 16; ++y) {
+        for (int x = 0; x != 16; ++x) {
+          int pos = padded_width*(y+mcroblk_y*16)+(x+mcroblk_x*16);
+          printf(" %02x%02x%02x", buf[pos+2], buf[pos+1], buf[pos+0]);
+        }
+        puts("");
+      }
+    }
+#endif
 
     if (++mcroblk_x == video_cxt->w_mcroblk_cnt) {
       mcroblk_x = 0;
@@ -258,16 +302,18 @@ public:
 void mpeg_parser::debug_output(uint8_t buf[]) {
   DEBUG_TRACE("");
 
-  static int pic_cnt = 0;
+  static int pic_cnt = -1;
   static bmp_t bmp;
   static_assert(sizeof(picbuf_t) <= sizeof(bmp.pixels), "bmp_t pixel buffer size too small");
 
-  create_bmp(this->video_cxt.height, this->video_cxt.width, &bmp);
-  std::memcpy(bmp.pixels, buf, sizeof(picbuf_t));
+  if (pic_cnt >= 0) {
+    create_bmp(this->video_cxt.height, this->video_cxt.width, &bmp);
+    std::memcpy(bmp.pixels, buf, sizeof(picbuf_t));
 
-  char filename[128];
-  std::sprintf(filename, "bin\\pic%04d.bmp", pic_cnt);
-  output_bmp(filename, &bmp);
+    char filename[128];
+    std::sprintf(filename, "bin\\pic%04d.bmp", pic_cnt);
+    output_bmp(filename, &bmp);
+  }
   ++pic_cnt;
 }
 
@@ -313,6 +359,7 @@ bool mpeg_parser::slice() {
   // XXX TODO: reset parameters
 
   unsigned int mcroblk_addr = (this->pic_cxt.slice_vpos - 1)*this->video_cxt.w_mcroblk_cnt - 1;
+  int past_intra_addr = -2;
 
   if (this->pic_cxt.pic_cod_typ == 1) {
     while ((this->bitbuf[this->bitpos>>3] & (0xff >> (this->bitpos&7))) != 0
@@ -339,6 +386,8 @@ bool mpeg_parser::slice() {
         this->pic_cxt.quantizer_scale = this->bitbuf[this->bitpos] >> 3;
         this->bitpos += 5;
       }
+      this->mcroblk_cxts[mcroblk_addr].past_intra_addr = past_intra_addr;
+      past_intra_addr = mcroblk_addr;
       this->mcroblk_cxts[mcroblk_addr].quantizer_scale = this->pic_cxt.quantizer_scale;
 
       for (int k = 0; k != 6; ++k) {
@@ -459,9 +508,11 @@ bool mpeg_parser::picture() {
     std::swap(this->F, this->B);
     // XXX TODO: display this->F
     this->debug_output(this->F->rgb);
+#if 0
     static bool end = false;
     if (end) throw std::runtime_error("USER REQUEST TERMINATION");
     else     end = true;
+#endif
   }
 
   std::memset(this->mcroblk_cxts, 0, sizeof(this->mcroblk_cxts));
