@@ -26,13 +26,13 @@ void gldraw(uint8_t buf[]) {
 }
 
 static void Redrew(int) {
-  DEBUG_TRACE("");
+  DEBUG_TRACEn(4,"");
   glutPostRedisplay();
   glutTimerFunc(30, Redrew, 0);
 }
 
 static void RenderSceneCB() {
-  DEBUG_TRACE("");
+  DEBUG_TRACEn(4,"");
 
   // draw the image to the texture
   glTexImage2D( GL_TEXTURE_2D

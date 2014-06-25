@@ -29,7 +29,7 @@ input_stream_t::~input_stream_t() {
 }
 
 void input_stream_t::advance() {
-  DEBUG_TRACE("");
+  DEBUG_TRACEn(3,"");
 
   static const size_t delta = is_buf_siz - is_buf_lim;
   if (this->pos < is_buf_lim*8)

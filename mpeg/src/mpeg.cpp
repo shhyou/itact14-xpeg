@@ -60,7 +60,7 @@ static void slowJpegDecode(
   pic_cxt_t *,
   mcroblk_cxt_t mcroblk_cxts[])
 {
-  DEBUG_TRACE("");
+  DEBUG_TRACEn(4,"");
 
   const int mcroblk_cnt = video_cxt->w_mcroblk_cnt*video_cxt->h_mcroblk_cnt;
   unsigned int mcroblk_y = 0, mcroblk_x = 0;
@@ -130,7 +130,7 @@ static void slowJpegDecode(
           ycbcr[i][j] = ycbcr[i][j] / 8;
 
 #if DEBUG_LEVEL >= 5
-      if (t == 100 && pic_count == 3) {
+      if (mcroblk_y==14 && mcroblk_x==0 && pic_count == 1) {
         printf("\nt =%2d k=%d dct_recon\n", t, k);
         for (int i = 0; i < 8; ++i) {
           for (int j = 0; j < 8; ++j) {
@@ -308,7 +308,7 @@ public:
 };
 
 void mpeg_parser::debugOutput(uint8_t buf[]) {
-  DEBUG_TRACE("");
+  DEBUG_TRACEn(4,"");
 
   static int pic_cnt = -1;
   static bmp_t bmp;
@@ -363,12 +363,12 @@ void mpeg_parser::render(picbuf_t& picbuf) {
       }
 
 #if DEBUG_LEVEL >= 5
-      if (t == 100 && pic_count == 3) {
-        printf("\nt = %2d (%d,%d) RGB quant=%d\n", t, mcroblk_y, mcroblk_x, mcroblk_cxts[t].quantizer_scale);
+      if (mcroblk_y==14 && mcroblk_x==0 && pic_count == 1) {
+        printf("\n(%d,%d) RGB\n", mcroblk_y, mcroblk_x);
         for (int y = 0; y != 16; ++y) {
           for (int x = 0; x != 16; ++x) {
-            int pos = padded_width*(video_cxt->height-y-mcroblk_y*16)+(x+mcroblk_x*16)*3;
-            printf(" %02x%02x%02x", buf[pos+2], buf[pos+1], buf[pos+0]);
+            int pos = padded_width*(this->video_cxt.height-y-mcroblk_y*16)+(x+mcroblk_x*16)*3;
+            printf(" %02x%02x%02x", rgb[pos+2], rgb[pos+1], rgb[pos+0]);
           }
           puts("");
         }
@@ -403,14 +403,14 @@ void mpeg_parser::skipExtensionsAndUserData() {
 }
 
 void mpeg_parser::decodeIntraBlock(unsigned int mcroblk_addr) {
-//  DEBUG_TRACE("");
+ DEBUG_TRACEn(4,"");
 
   this->mcroblk_cxts[mcroblk_addr].flags |= MACROBLOCK_INTRA;
   this->mcroblk_cxts[mcroblk_addr].past_intra_addr = this->pic_cxt.past_intra_addr;
   this->pic_cxt.past_intra_addr = mcroblk_addr;
   this->mcroblk_cxts[mcroblk_addr].quantizer_scale = this->pic_cxt.quantizer_scale;
 
-  dprintf5("macroblock %d; quantizer_scale: %d\n", mcroblk_addr, this->mcroblk_cxts[mcroblk_addr].quantizer_scale);
+  dprintf4("macroblock %d; quantizer_scale: %d\n", mcroblk_addr, this->mcroblk_cxts[mcroblk_addr].quantizer_scale);
   for (int k = 0; k != 6; ++k) {
     int16_t (&dct_zz)[8*8] = this->mcroblk_cxts[mcroblk_addr].dct_zz[k];
     dprintf5("   block %d:\n", k);
@@ -470,11 +470,11 @@ void mpeg_parser::decodeIntraBlock(unsigned int mcroblk_addr) {
 }
 
 void mpeg_parser::decodeNonIntraBlock(unsigned int mcroblk_addr) {
-  DEBUG_TRACE("");
+  DEBUG_TRACEn(4,"");
 
   this->mcroblk_cxts[mcroblk_addr].quantizer_scale = this->pic_cxt.quantizer_scale;
 
-  dprintf5("macroblock %d; quantizer_scale: %d non-intra\n", mcroblk_addr, this->mcroblk_cxts[mcroblk_addr].quantizer_scale);
+  dprintf4("macroblock %d; quantizer_scale: %d non-intra\n", mcroblk_addr, this->mcroblk_cxts[mcroblk_addr].quantizer_scale);
   for (int k = 0; k != 6; ++k) {
     int16_t (&dct_zz)[8*8] = this->mcroblk_cxts[mcroblk_addr].dct_zz[k];
     if ((this->pic_cxt.coded_block_pattern&(0x20>>k)) == 0)
@@ -567,7 +567,7 @@ inline void mpeg_parser::readPredInfo(
   if (_f!=1 && motion.motion_horizontal_code!=0) {
     uint32_t m = this->peek16(this->bitpos);
     this->bitpos += _rsiz;
-    motion.motion_horizontal_r = m >> _rsiz;
+    motion.motion_horizontal_r = m >> (16 - _rsiz);
   }
   {
     uint32_t m = this->peek16(this->bitpos);
@@ -577,7 +577,7 @@ inline void mpeg_parser::readPredInfo(
   if (_f!=1 && motion.motion_vertical_code!=0) {
     uint32_t m = this->peek16(this->bitpos);
     this->bitpos += _rsiz;
-    motion.motion_vertical_r = m >> _rsiz;
+    motion.motion_vertical_r = m >> (16 - _rsiz);
   }
 }
 
@@ -596,6 +596,10 @@ inline void mpeg_parser::predCopy(
     int right_half = k<4? (prd.recon_right-2*right) : (prd.recon_right/2 - 2*right);
     int down_half=   k<4? (prd.recon_down-2*down) : (prd.recon_down/2 - 2*down);
     static const auto past = [&](int y, int x) -> int {
+if(y>1000){
+dprintf3("y=%d,x=%d\n",y,x);
+dprintf3("prd=(%d,%d)\n",prd.recon_down,prd.recon_right);
+}
       int y0 = mcroblk_y*16, x0 = mcroblk_x*16;
       if (k < 4) {
         y0 += 8*(k/2);
@@ -642,7 +646,7 @@ inline void mpeg_parser::predCopy(
 
 template<int pic_cod_typ>
 bool mpeg_parser::slice() {
-  DEBUG_TRACE("");
+  DEBUG_TRACEn(3,"");
 
   {
     uint32_t m = this->peekInt_be(this->bitpos);
@@ -798,7 +802,7 @@ bool mpeg_parser::slice() {
 }
 
 bool mpeg_parser::picture() {
-  DEBUG_TRACE("");
+  DEBUG_TRACEn(3,"");
 
   if (this->peekInt(this->bitpos) != picture_start_code)
     return false;
@@ -980,7 +984,7 @@ void mpeg_parser::parseGOPEnd() {
 }
 
 int main() {
-  const char *clipname = "../phw_mpeg/I_ONLY.M1V";
+  const char *clipname = "../phw_mpeg/IP_ONLY.M1V";
   try {
     {
       mpeg_parser *m1v = new mpeg_parser(clipname);
