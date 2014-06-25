@@ -78,7 +78,10 @@ static void slow_jpeg_decode(
     int16_t dct_recon[8*8];
     int ycbcrs[6][8][8];
     mcroblk_cxt_t &mcroblk_cxt = mcroblk_cxts[t];
-    assert(mcroblk_cxt.past_intra_addr==-2 || mcroblk_cxt.past_intra_addr==t-1);
+    if (mcroblk_cxt.flags & MACROBLOCK_SKIPPED)
+      continue;
+
+    assert(mcroblk_cxt.past_intra_addr==-2 || mcroblk_cxt.past_intra_addr==t-1); // should not hold now
 
     for (int k = 0; k != 6; ++k) {
       // DCT coefficient reconstruction
@@ -89,9 +92,13 @@ static void slow_jpeg_decode(
       }
       dct_recon[0] = dct_dc_past[(k&4)|(k&(k>>2))] + dct_zz[0]*8;
       dct_dc_past[(k&4)|(k&(k>>2))] = dct_recon[0];
+      int16_t (&quantizer_matrix)[64] =
+        (mcroblk_cxt.flags & MACROBLOCK_INTRA)?
+          video_cxt->intra_quantizer_matrix
+        : video_cxt->non_intra_quantizer_matrix;
       for (int i = 1; i != 64; ++i) {
         dct_recon[i] = (2 * dct_zz[i] * static_cast<int>(mcroblk_cxt.quantizer_scale)
-                          * video_cxt->intra_quantizer_matrix[i])/16;
+                          * quantizer_matrix[i])/16;
         if ((dct_recon[i]&1) == 0) {
           dct_recon[i] -= sgn(dct_recon[i]);
         }
@@ -167,9 +174,9 @@ static void slow_jpeg_decode(
 
         // B-G-R, bmp order
         int pos = padded_width*(video_cxt->height-y-y0)+(x+x0)*3;
-        buf[pos+0] += cut255(int_of_f4(b));
-        buf[pos+1] += cut255(int_of_f4(g));
-        buf[pos+2] += cut255(int_of_f4(r));
+        buf[pos+0] = cut255(buf[pos+0]+int_of_f4(b));
+        buf[pos+1] = cut255(buf[pos+1]+int_of_f4(g));
+        buf[pos+2] = cut255(buf[pos+2]+int_of_f4(r));
       }
     }
 
@@ -193,6 +200,11 @@ static void slow_jpeg_decode(
   }
 }
 
+static void pred_calc(const predict_t &prev, const predict_t& pred) {
+  // XXX TODO
+  throw std::runtime_error("pred_calc not done yet");
+}
+
 class mpeg_parser {
   input_stream_t fin;
   std::size_t& bitpos;
@@ -201,6 +213,9 @@ class mpeg_parser {
   video_cxt_t video_cxt;
   pic_cxt_t pic_cxt;
   mcroblk_cxt_t mcroblk_cxts[mcroblk_max] __attribute__ ((aligned(32)));
+
+  predict_t f_prev_prd, f_prd;
+  predict_t b_prev_prd, b_prd;
 
   struct picbuf_t {
     uint8_t rgb[h_max*w_max*3];
@@ -227,6 +242,8 @@ class mpeg_parser {
 
   void skipExtensionsAndUserData();
   void load_quantizer_matrix(int16_t (&mat)[64]);
+  void copyMacroblock(uint8_t pels[], size_t mcroblk_addr);
+  void copyMacroblock2(size_t mcroblk_addr);
 
   void next_start_code() {
     this->bitpos = (this->bitpos+7u)&(~7u);
@@ -236,6 +253,7 @@ class mpeg_parser {
 
   // real parsing
   void decodeIntraBlock(unsigned int mcroblk_addr);
+  void readPredInfo(motion_code_t &motion, unsigned int _f, unsigned int _rsiz);
   bool picture();
   template<int pic_cod_typ> bool slice();
 
@@ -297,6 +315,7 @@ void mpeg_parser::skipExtensionsAndUserData() {
 void mpeg_parser::decodeIntraBlock(unsigned int mcroblk_addr) {
   DEBUG_TRACE("");
 
+  this->mcroblk_cxts[mcroblk_addr].flags |= MACROBLOCK_INTRA;
   this->mcroblk_cxts[mcroblk_addr].past_intra_addr = this->pic_cxt.past_intra_addr;
   this->pic_cxt.past_intra_addr = mcroblk_addr;
   this->mcroblk_cxts[mcroblk_addr].quantizer_scale = this->pic_cxt.quantizer_scale;
@@ -360,6 +379,58 @@ void mpeg_parser::decodeIntraBlock(unsigned int mcroblk_addr) {
   }
 }
 
+void mpeg_parser::copyMacroblock(uint8_t pels[], size_t mcroblk_addr) {
+  const int padded_width = (this->video_cxt.width*3+3)/4*4;
+  int y0 = (mcroblk_addr/this->video_cxt.w_mcroblk_cnt)*16;
+  int x0 = (mcroblk_addr%this->video_cxt.w_mcroblk_cnt)*16;
+  for (int y = 0; y < 16; ++y) {
+    std::memcpy(
+      this->C->rgb,
+      pels + (y0+y)*padded_width + x0*3,
+      3*16
+    );
+  }
+}
+
+void mpeg_parser::copyMacroblock2(size_t mcroblk_addr) {
+  const int padded_width = (this->video_cxt.width*3+3)/4*4;
+  int y0 = (mcroblk_addr/this->video_cxt.w_mcroblk_cnt)*16;
+  int x0 = (mcroblk_addr%this->video_cxt.w_mcroblk_cnt)*16;
+  for (int y = 0; y < 16; ++y) {
+    for (int x_pos = 0; x_pos < 16*3; ++x_pos) {
+      int pos = (y0+y)*padded_width + x0*3 + x_pos;
+      this->C->rgb[pos] = (this->F->rgb[pos] + this->B->rgb[pos])/2;
+    }
+  }
+}
+
+inline void mpeg_parser::readPredInfo(
+  motion_code_t &motion,
+  unsigned int _f,
+  unsigned int _rsiz)
+{
+  {
+    uint32_t m = this->peek16(this->bitpos);
+    this->bitpos += huff_motion_vec[m][0];
+    motion.motion_horizontal_code = huff_motion_vec[m][1];
+  }
+  if (_f!=1 && motion.motion_horizontal_code!=0) {
+    uint32_t m = this->peek16(this->bitpos);
+    this->bitpos += _rsiz;
+    motion.motion_horizontal_r = m >> _rsiz;
+  }
+  {
+    uint32_t m = this->peek16(this->bitpos);
+    this->bitpos += huff_motion_vec[m][0];
+    motion.motion_vertical_code = huff_motion_vec[m][1];
+  }
+  if (_f!=1 && motion.motion_vertical_code!=0) {
+    uint32_t m = this->peek16(this->bitpos);
+    this->bitpos += _rsiz;
+    motion.motion_vertical_r = m >> _rsiz;
+  }
+}
+
 template<int pic_cod_typ>
 bool mpeg_parser::slice() {
   DEBUG_TRACE("");
@@ -384,41 +455,86 @@ bool mpeg_parser::slice() {
   unsigned int mcroblk_addr = (this->pic_cxt.slice_vpos - 1)*this->video_cxt.w_mcroblk_cnt - 1;
   this->pic_cxt.past_intra_addr = -2;
 
+  std::memset(&this->f_prd, 0, sizeof(predict_t));
+  std::memset(&this->b_prd, 0, sizeof(predict_t));
   while ((this->bitbuf[this->bitpos>>3] & (0xff >> (this->bitpos&7))) != 0
       || (this->peekInt((this->bitpos+7)&(~7u))&0x00ffffff) != 0x00010000)
   {
     while ((this->peek16(this->bitpos)>>5) == 0x000f)
       this->bitpos += 11;
+    int skipped_cnt = -1;
     while ((this->peek16(this->bitpos)>>5) == 0x0008) {
       mcroblk_addr += 33;
+      skipped_cnt += 33;
       this->bitpos += 11;
-    }
-    if (pic_cod_typ == 2) {
-      // XXX TODO
-      throw std::logic_error("P frame skip not implemented");
-    } else if (pic_cod_typ == 3) {
-      // XXX TODO
-      throw std::logic_error("B frame skip not implemented");
     }
     { // macroblock_address_increment
       uint32_t m = this->peek16(this->bitpos);
       mcroblk_addr += huff_mcroblk_addrinc[m][1];
+      skipped_cnt  += huff_mcroblk_addrinc[m][1];
       this->bitpos += huff_mcroblk_addrinc[m][0];
+    }
+    if (skipped_cnt > 0) {
+      if (pic_cod_typ == 2) {
+        for (size_t k = mcroblk_addr-skipped_cnt-1; k != mcroblk_addr; ++k) {
+          this->copyMacroblock(this->F->rgb, k);
+          // no need to clear mcroblk_cxt here: they're zeroed out
+        }
+        std::memset(&this->f_prev_prd, 0, sizeof(predict_t));
+      } else if (pic_cod_typ == 3) {
+        for (size_t k = mcroblk_addr-skipped_cnt-1; k != mcroblk_addr; ++k) {
+          // XXX TODO
+          throw std::logic_error("B frame skip not implemented");
+        }
+      }
     }
     const mcroblk_typ_t *mcroblk_typ;
     { // macroblock_type
       uint32_t m = this->peek16(this->bitpos);
-      mcroblk_typ = &huff_mcroblk_typ[this->pic_cxt.pic_cod_typ][m];
-      this->bitpos += huff_mcroblk_typ[this->pic_cxt.pic_cod_typ][m].len;
+      mcroblk_typ = &huff_mcroblk_typ[pic_cod_typ][m];
+      this->bitpos += huff_mcroblk_typ[pic_cod_typ][m].len;
     }
     if (mcroblk_typ->quant) {
       this->pic_cxt.quantizer_scale = (this->peek16(this->bitpos)>>11)&31;
       this->bitpos += 5;
     }
+    // special case: process intra block
     if (mcroblk_typ->intra) {
       this->decodeIntraBlock(mcroblk_addr);
-      continue; // XXX TODO check correctness
+      if (pic_cod_typ == 3) {
+        std::memset(&this->f_prev_prd, 0, sizeof(predict_t));
+        std::memset(&this->b_prev_prd, 0, sizeof(predict_t));
+      }
+      continue;
     }
+    // TODO: add huffman tbls
+    if (mcroblk_typ->f_motion) {
+      this->readPredInfo(this->pic_cxt.forward, this->pic_cxt.f_f, this->pic_cxt.f_rsiz);
+    } else {
+      if (pic_cod_typ == 2) { // P-frame reset
+        std::memset(&this->f_prd, 0, sizeof(predict_t));
+      } else if (pic_cod_typ == 3) {
+        this->f_prd = this->f_prev_prd;
+      }
+    }
+    if (mcroblk_typ->b_motion) {
+      this->readPredInfo(this->pic_cxt.backward, this->pic_cxt.b_f, this->pic_cxt.b_rsiz);
+    } else {
+      if (pic_cod_typ == 2) { // P-frame reset
+        std::memset(&this->b_prd, 0, sizeof(predict_t));
+      } else if (pic_cod_typ == 3) {
+        this->b_prd = this->b_prev_prd;
+      }
+    }
+    if (mcroblk_typ->pattern) {
+      // XXX TODO
+      throw std::logic_error("pattern not impl'd)");
+    }
+
+    // XXX TODO: copy reconstructed block
+    throw std::logic_error("TODO: copy reconstructed block");
+    this->f_prev_prd = this->f_prd;
+    this->b_prev_prd = this->b_prd;
   }
   this->next_start_code();
 
@@ -616,7 +732,7 @@ void mpeg_parser::parseGOPEnd() {
 }
 
 int main() {
-  const char *clipname = "../phw_mpeg/I_ONLY.M1V";
+  const char *clipname = "../phw_mpeg/IP_ONLY.M1V";
   try {
     {
       mpeg_parser *m1v = new mpeg_parser(clipname);

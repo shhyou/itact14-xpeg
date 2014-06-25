@@ -29,18 +29,25 @@ struct video_cxt_t {
   int h_mcroblk_cnt;
 };
 
+struct motion_code_t {
+  int motion_horizontal_code;
+  unsigned int motion_horizontal_r;
+  int motion_vertical_code;
+  unsigned int motion_vertical_r;
+};
+
 struct pic_cxt_t {
   unsigned int pic_cod_typ;
   unsigned int temporal_ref;
 
   // forward/backward info
   bool f_fullpel_vec;
-  unsigned int f_fcode;
+  unsigned int f_fcode; //unused
   unsigned int f_rsiz;
   unsigned int f_f;
 
   bool b_fullpel_vec;
-  unsigned int b_fcode;
+  unsigned int b_fcode; //unused
   unsigned int b_rsiz;
   unsigned int b_f;
 
@@ -48,7 +55,13 @@ struct pic_cxt_t {
   unsigned int slice_vpos;
   std::int16_t quantizer_scale;
   int past_intra_addr;
+
+  // macroblock data
+  motion_code_t forward, backward;
 };
+
+#define MACROBLOCK_SKIPPED      2
+#define MACROBLOCK_INTRA        1
 
 struct mcroblk_cxt_t {
   int flags                     __attribute__ ((aligned(32)));
@@ -57,7 +70,14 @@ struct mcroblk_cxt_t {
   std::int16_t dct_zz[6][8*8]   __attribute__ ((aligned(32)));
 };
 
-static const int16_t default_intra_quantizer_matrix[64] = {
+struct predict_t {
+  int recon_right;
+  int recon_down;
+  int right, right_half;
+  int down, down_half;
+};
+
+static const std::int16_t default_intra_quantizer_matrix[64] = {
   8,
   16, 16,
   19, 16, 19,
@@ -75,7 +95,7 @@ static const int16_t default_intra_quantizer_matrix[64] = {
   83
 };
 
-static const int16_t default_non_intra_quantizer_matrix[64] = {
+static const std::int16_t default_non_intra_quantizer_matrix[64] = {
   16, 16, 16, 16, 16, 16, 16, 16,
   16, 16, 16, 16, 16, 16, 16, 16,
   16, 16, 16, 16, 16, 16, 16, 16,
