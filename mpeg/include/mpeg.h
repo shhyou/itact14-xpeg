@@ -1,5 +1,9 @@
 #pragma once
 
+#include "debugutils.h"
+#include "huffman_tbl.h"
+#include "input_stream.h"
+
 #include <cstdint>
 
 static const uint32_t picture_start_code      = 0x00010000;
@@ -77,6 +81,80 @@ struct mcroblk_cxt_t {
 struct predict_t {
   int recon_right;
   int recon_down;
+};
+
+class mpeg_parser {
+  input_stream_t fin;
+  std::size_t& bitpos;
+  std::uint8_t (&bitbuf)[is_buf_siz];
+
+  video_cxt_t video_cxt;
+  pic_cxt_t pic_cxt;
+  mcroblk_cxt_t mcroblk_cxts[mcroblk_max] __attribute__ ((aligned(32)));
+
+  predict_t f_prev_prd, f_prd;
+  predict_t b_prev_prd, b_prd;
+
+  struct picbuf_t {
+    int ycbcr[h_mcroblk_max][w_mcroblk_max][6][8][8];
+  } picbuf[picbuf_max];
+
+  picbuf_t *F, *C, *B;
+
+  // utilities
+  void debugOutput(std::uint8_t buf[]);
+  void render(picbuf_t& picbuf);
+
+  std::uint32_t peekInt(std::size_t pos) {
+    // bad code; note that `pos` is assumed to be **byte**-aligned
+    assert((pos&7) == 0);
+    return *reinterpret_cast<std::uint32_t*>(this->bitbuf + (pos>>3));
+  }
+
+  std::uint32_t peekInt_be(std::size_t pos) { return __builtin_bswap32(this->peekInt(pos)); }
+
+  std::uint32_t peek16(std::size_t pos) {
+    std::size_t b = pos >> 3;
+    std::uint32_t m = (this->bitbuf[b]<<16) | (this->bitbuf[b+1]<<8) | this->bitbuf[b+2];
+    return (m >> (8 - (pos & 7))) & 0xffff;
+  }
+
+  void skipExtensionsAndUserData();
+  void load_quantizer_matrix(std::int16_t (&mat)[64]);
+  void copyMacroblock(picbuf_t &picbuf, std::size_t mcroblk_addr);
+  void copyMacroblock2(std::size_t mcroblk_addr);
+  void predCopy(unsigned int mcroblk_addr, int (&pel)[6][8][8], picbuf_t &past, predict_t &prd);
+
+  void next_start_code() {
+    this->bitpos = (this->bitpos+7u)&(~7u);
+    while ((this->peekInt(this->bitpos)&0x00ffffff) != 0x00010000)
+      this->bitpos += 8;
+  }
+
+  // real parsing
+  void decodeIntraBlock(unsigned int mcroblk_addr);
+  void decodeNonIntraBlock(unsigned int mcroblk_addr);
+  void readPredInfo(motion_code_t &motion, unsigned int _f, unsigned int _rsiz);
+  bool picture();
+  template<int pic_cod_typ> bool slice();
+
+public:
+  mpeg_parser(const char *filename)
+    : fin(filename), bitpos(fin.pos), bitbuf(fin.buf)
+  {
+    DEBUG_TRACE("");
+    this->F = &this->picbuf[0];
+    this->C = &this->picbuf[1];
+    this->B = &this->picbuf[2];
+    init_huff_tbls();
+  }
+
+  ~mpeg_parser() {}
+
+  int getWidth() { return this->video_cxt.width; }
+  int getHeight() { return this->video_cxt.height; }
+  void parseInfo();
+  void parseGOPEnd();
 };
 
 static const std::int16_t default_intra_quantizer_matrix[64] = {
