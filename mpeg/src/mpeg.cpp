@@ -1021,10 +1021,25 @@ void mpeg_parser::parseInfo() {
     this->bitpos += 8;
   }
 
+  if (this->peekInt(this->bitpos) == sequence_header_code) {
+    // sequence_header()
+    uint32_t siz = this->peekInt_be(this->bitpos+32);
+    this->video_cxt.width = siz >> (32 - 12);
+    this->video_cxt.w_mcroblk_cnt = (this->video_cxt.width + 15)/16;
+    this->video_cxt.height = (siz >> (32 - 12 - 12)) & 0xfff;
+    this->video_cxt.h_mcroblk_cnt = (this->video_cxt.height + 15)/16;
+  } else {
+    throw std::runtime_error("not a sequence_header");
+  }
+}
+
+void mpeg_parser::parseGOPEnd() {
+  DEBUG_TRACE("");
+
   size_t seq_count = 0;
   // video_sequence()
   // *** we only support one sequence now ***
-  if (this->peekInt(this->bitpos) == sequence_header_code) {
+  while (this->peekInt(this->bitpos) == sequence_header_code) {
     // sequence_header()
     {
       uint32_t siz = this->peekInt_be(this->bitpos+32);
@@ -1060,29 +1075,23 @@ void mpeg_parser::parseInfo() {
       this->next_start_code();
       this->skipExtensionsAndUserData();
     }
-  } else {
-    throw std::runtime_error("not a sequence_header");
-  }
-}
 
-void mpeg_parser::parseGOPEnd() {
-  DEBUG_TRACE("");
-
-  // back to video_sequence()
-  // enter group_of_pictures layer
-  while (this->peekInt(this->bitpos) == group_start_code) {
-    dprintf5("%08x: group start code\n", this->bitpos);
-    this->video_cxt.time_code = this->peekInt_be(this->bitpos+32) >> (32 - 25);
-    this->bitpos += 32 + 25 + 1 + 1;
-    this->next_start_code();
-    this->skipExtensionsAndUserData();
-    for (;;) {
-      this->fin.advance();
-      bool success = this->picture();
-      if (not success) break;
+    // back to video_sequence()
+    // enter group_of_pictures layer
+    while (this->peekInt(this->bitpos) == group_start_code) {
+      dprintf5("%08x: group start code\n", this->bitpos);
+      this->video_cxt.time_code = this->peekInt_be(this->bitpos+32) >> (32 - 25);
+      this->bitpos += 32 + 25 + 1 + 1;
+      this->next_start_code();
+      this->skipExtensionsAndUserData();
+      for (;;) {
+        this->fin.advance();
+        bool success = this->picture();
+        if (not success) break;
+      }
     }
+    // end of groups
   }
-  // end of groups
 
   // end
   if (this->peekInt(this->bitpos) != sequence_end_code) {
