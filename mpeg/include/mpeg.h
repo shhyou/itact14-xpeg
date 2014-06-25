@@ -59,6 +59,8 @@ struct pic_cxt_t {
   // macroblock data
   motion_code_t forward, backward;
   int coded_block_pattern;
+  bool prev_f_motion;
+  bool prev_b_motion;
 };
 
 #define MACROBLOCK_SKIPPED      0x040

@@ -87,8 +87,6 @@ static void slowJpegDecode(
       continue;
     }
 
-//    assert(mcroblk_cxt.past_intra_addr==-2 || mcroblk_cxt.past_intra_addr==t-1); // should not hold now
-
     for (int k = 0; k != 6; ++k) {
       // DCT coefficient reconstruction
       int16_t (&dct_zz)[8*8] = mcroblk_cxt.dct_zz[k];
@@ -203,7 +201,7 @@ static void predCalc(
   if (_f==1 || motion.motion_horizontal_code==0) {
     complement_horizontal_r = 0;
   } else {
-    complement_horizontal_r = _f -1 - motion.motion_horizontal_r;
+    complement_horizontal_r = _f - 1 - motion.motion_horizontal_r;
   }
   if (_f==1 || motion.motion_vertical_code==0) {
     complement_vertical_r = 0;
@@ -700,6 +698,11 @@ bool mpeg_parser::slice() {
     this->pic_cxt.slice_vpos = m & 0xff;
   }
 
+  std::memset(&this->f_prd, 0, sizeof(predict_t));
+  std::memset(&this->b_prd, 0, sizeof(predict_t));
+  std::memset(&this->f_prev_prd, 0, sizeof(predict_t));
+  std::memset(&this->b_prev_prd, 0, sizeof(predict_t));
+
   // note: this is *correct* since it is always aligned
   this->pic_cxt.quantizer_scale = this->bitbuf[(this->bitpos>>3) + 4] >> 3;
 
@@ -735,16 +738,46 @@ bool mpeg_parser::slice() {
     dprintf4("macroblock %d; quantizer_scale: %d non-intra\n", mcroblk_addr, this->mcroblk_cxts[mcroblk_addr].quantizer_scale);
     if (skipped_cnt > 0) {
       if (pic_cod_typ == 2) {
-        for (size_t k = mcroblk_addr-skipped_cnt-1; k != mcroblk_addr; ++k) {
-          this->copyMacroblock(*this->F, k);
+        for (size_t t = mcroblk_addr-skipped_cnt-1; t != mcroblk_addr; ++t) {
+          this->copyMacroblock(*this->F, t);
           // no need to clear mcroblk_cxt here: they're zeroed out
-          this->mcroblk_cxts[k].flags |= MACROBLOCK_SKIPPED;
+          this->mcroblk_cxts[t].flags |= MACROBLOCK_SKIPPED;
         }
         std::memset(&this->f_prev_prd, 0, sizeof(predict_t));
       } else if (pic_cod_typ == 3) {
-        for (size_t k = mcroblk_addr-skipped_cnt-1; k != mcroblk_addr; ++k) {
-          // XXX TODO
-          throw std::logic_error("B frame skip not implemented");
+        predict_t z_prd;
+        std::memset(&z_prd, 0, sizeof(predict_t));
+
+        for (size_t t = mcroblk_addr-skipped_cnt-1; t != mcroblk_addr; ++t) {
+          int f_pels[6][8][8];
+          int b_pels[6][8][8];
+
+          if (this->pic_cxt.prev_f_motion) {
+            this->predCopy(t, f_pels, *this->F, z_prd);
+          }
+
+          if (this->pic_cxt.prev_b_motion) {
+            this->predCopy(t, b_pels, *this->B, z_prd);
+          }
+
+          int my = t/this->video_cxt.w_mcroblk_cnt;
+          int mx = t%this->video_cxt.w_mcroblk_cnt;
+          if (this->pic_cxt.prev_f_motion && this->pic_cxt.prev_b_motion) {
+            for (int k = 0; k != 6; ++k) {
+              for (int y = 0; y != 8; ++y) {
+                for (int x = 0; x != 8; ++x) {
+                  this->C->ycbcr[my][mx][k][y][x] =
+                    (f_pels[k][y][x] + b_pels[k][y][x])/2;
+                }
+              }
+            }
+          } else {
+            std::memcpy(
+              this->C->ycbcr[my][mx],
+              this->pic_cxt.prev_f_motion? f_pels : b_pels,
+              sizeof(this->C->ycbcr[my][mx])
+            );
+          }
         }
       }
     }
@@ -768,17 +801,28 @@ bool mpeg_parser::slice() {
       continue;
     }
 
-    int f_pels[6][8][8];
-    int b_pels[6][8][8];
-
     dprintf5("%08x read f_motion?\n",this->bitpos);
     if (mcroblk_typ->f_motion) {
       this->readPredInfo(this->pic_cxt.forward, this->pic_cxt.f_f, this->pic_cxt.f_rsiz);
-    } else {
-      if (pic_cod_typ == 3) { // B-frame
-        this->f_prd = this->f_prev_prd;
-      }
     }
+    if (mcroblk_typ->b_motion) {
+      this->readPredInfo(this->pic_cxt.backward, this->pic_cxt.b_f, this->pic_cxt.b_rsiz);
+    }
+
+    dprintf5("%08x read coded pattern?\n",this->bitpos);
+    if (mcroblk_typ->pattern) {
+      uint32_t m = this->peek16(this->bitpos);
+      this->bitpos += huff_cbp[m][0];
+      this->pic_cxt.coded_block_pattern = huff_cbp[m][1];
+    } else {
+      this->pic_cxt.coded_block_pattern = 0;
+    }
+
+    dprintf5("%08x non intra block\n",this->bitpos);
+    this->decodeNonIntraBlock(mcroblk_addr);
+
+    int f_pels[6][8][8];
+    int b_pels[6][8][8];
     if (pic_cod_typ == 2) {
       if (mcroblk_typ->f_motion) {
         predCalc(
@@ -791,7 +835,27 @@ bool mpeg_parser::slice() {
         dprintf5("forward vec (%d,%d) .. (%d,%d)\n",this->f_prd.recon_down,this->f_prd.recon_right);
       }
       this->predCopy(mcroblk_addr, f_pels, *this->F, this->f_prd);
+    } else if (pic_cod_typ == 3) { // always true
+      if (mcroblk_typ->f_motion) {
+        predCalc(
+          this->pic_cxt.f_fullpel_vec, this->pic_cxt.f_f,
+          this->f_prev_prd, this->f_prd, this->pic_cxt.forward
+        );
+        this->predCopy(mcroblk_addr, f_pels, *this->F, this->f_prd);
+      } else {
+        this->f_prd = this->f_prev_prd;
+      }
+      if (mcroblk_typ->b_motion) {
+        predCalc(
+          this->pic_cxt.b_fullpel_vec, this->pic_cxt.b_f,
+          this->b_prd, this->b_prev_prd, this->pic_cxt.backward
+        );
+        this->predCopy(mcroblk_addr, b_pels, *this->B, this->b_prd);
+      } else {
+        this->b_prd = this->b_prev_prd;
+      }
     }
+
 #if DEBUG_LEVEL >= 5
     if (mcroblk_addr == 281) {
       fprintf(stderr,"macroblk_addr=%d\n",mcroblk_addr);
@@ -806,32 +870,6 @@ bool mpeg_parser::slice() {
       }
     }
 #endif
-    if (mcroblk_typ->b_motion) {
-      this->readPredInfo(this->pic_cxt.backward, this->pic_cxt.b_f, this->pic_cxt.b_rsiz);
-      predCalc(
-        this->pic_cxt.b_fullpel_vec, this->pic_cxt.b_f,
-        this->b_prd, this->b_prev_prd, this->pic_cxt.backward
-      );
-      this->predCopy(mcroblk_addr, b_pels, *this->B, this->b_prd);
-    } else {
-      if (pic_cod_typ == 2) { // P-frame reset
-        std::memset(&this->b_prd, 0, sizeof(predict_t));
-      } else if (pic_cod_typ == 3) {
-        this->b_prd = this->b_prev_prd;
-      }
-    }
-
-    dprintf5("%08x read coded pattern?\n",this->bitpos);
-    if (mcroblk_typ->pattern) {
-      uint32_t m = this->peek16(this->bitpos);
-      this->bitpos += huff_cbp[m][0];
-      this->pic_cxt.coded_block_pattern = huff_cbp[m][1];
-    } else {
-      this->pic_cxt.coded_block_pattern = 0;
-    }
-
-    dprintf5("%08x non intra block\n",this->bitpos);
-    this->decodeNonIntraBlock(mcroblk_addr);
 
     {
       int mcroblk_y = mcroblk_addr/this->video_cxt.w_mcroblk_cnt;
@@ -862,6 +900,8 @@ bool mpeg_parser::slice() {
 
     this->f_prev_prd = this->f_prd;
     this->b_prev_prd = this->b_prd;
+    this->pic_cxt.prev_f_motion = mcroblk_typ->f_motion;
+    this->pic_cxt.prev_b_motion = mcroblk_typ->b_motion;
   }
   this->next_start_code();
 
@@ -1051,7 +1091,7 @@ void mpeg_parser::parseGOPEnd() {
 }
 
 int main() {
-  const char *clipname = "../phw_mpeg/IP_ONLY.M1V";
+  const char *clipname = "../phw_mpeg/IPB_ALL.M1V";
   try {
     {
       mpeg_parser *m1v = new mpeg_parser(clipname);
