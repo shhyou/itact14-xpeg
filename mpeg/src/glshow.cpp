@@ -15,13 +15,15 @@ static GLuint texture;
 static int width, height, padded_width;
 
 uint8_t local_buf[1024*1024*3];
+clock_t st = std::clock();
 
 void gldraw(uint8_t buf[]) {
   DEBUG_TRACE("");
   std::memcpy(local_buf, buf, padded_width*height);
 
 #if DEBUG_LEVEL == 0
-  Sleep(10); // XXX TODO hack: use inter-thread communication next time
+  if ((std::clock()-st) < 10)
+    Sleep(10); // XXX TODO hack: use inter-thread communication next time
 #endif
 }
 

@@ -1090,9 +1090,13 @@ void mpeg_parser::parseGOPEnd() {
   }
 }
 
-int main() {
-  const char *clipname = "../phw_mpeg/IPB_ALL.M1V";
+int main(int argc, char **argv) {
   try {
+    if (argc != 2) {
+      std::fprintf(stderr, "Error: use \"%s FILENAME\"\n", argv[0]);
+      throw std::runtime_error("Incorrect command line argument");
+    }
+    char *clipname = argv[1];
     {
       mpeg_parser *m1v = new mpeg_parser(clipname);
       m1v->parseInfo();
