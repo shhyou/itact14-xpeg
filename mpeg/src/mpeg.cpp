@@ -75,8 +75,14 @@ static void slowJpegDecode(
     int16_t dct_recon[8*8];
     int ycbcrs[6][8][8];
     mcroblk_cxt_t &mcroblk_cxt = mcroblk_cxts[t];
-    if (mcroblk_cxt.flags & MACROBLOCK_SKIPPED)
+    if (mcroblk_cxt.flags & MACROBLOCK_SKIPPED) {
+      dprintf5("mcroblk %d: skipped\n", t);
+      if (++mcroblk_x == video_cxt->w_mcroblk_cnt) {
+        mcroblk_x = 0;
+        ++mcroblk_y;
+      }
       continue;
+    }
 
 //    assert(mcroblk_cxt.past_intra_addr==-2 || mcroblk_cxt.past_intra_addr==t-1); // should not hold now
 
@@ -87,9 +93,9 @@ static void slowJpegDecode(
       if (unlikely((k==0 || (k&4)) && t-mcroblk_cxt.past_intra_addr > 1)) {
         dct_dc_past[k] = 128*8;
       }
-      dct_recon[0] = dct_dc_past[(k&4)|(k&(k>>2))] + dct_zz[0]*8;
-      dct_dc_past[(k&4)|(k&(k>>2))] = dct_recon[0];
       if (mcroblk_cxt.flags & MACROBLOCK_INTRA) {
+        dct_recon[0] = dct_dc_past[(k&4)|(k&(k>>2))] + dct_zz[0]*8;
+        dct_dc_past[(k&4)|(k&(k>>2))] = dct_recon[0];
         for (int i = 1; i != 64; ++i) {
           dct_recon[i] = (2 * dct_zz[i] * static_cast<int>(mcroblk_cxt.quantizer_scale)
                             * video_cxt->intra_quantizer_matrix[i])/16;
@@ -98,7 +104,7 @@ static void slowJpegDecode(
           }
         }
       } else {
-        for (int i = 1; i != 64; ++i) {
+        for (int i = 0; i != 64; ++i) {
           dct_recon[i] = ((2*dct_zz[i] + sgn(dct_zz[i]))
                             * static_cast<int>(mcroblk_cxt.quantizer_scale)
                             * video_cxt->non_intra_quantizer_matrix[i])/16;
@@ -130,7 +136,7 @@ static void slowJpegDecode(
           ycbcr[i][j] = ycbcr[i][j] / 8;
 
 #if DEBUG_LEVEL >= 5
-      if (mcroblk_y==14 && mcroblk_x==0 && pic_count == 1) {
+      if (mcroblk_y==15-1 && mcroblk_x==20-6) {
         printf("\nt =%2d k=%d dct_recon\n", t, k);
         for (int i = 0; i < 8; ++i) {
           for (int j = 0; j < 8; ++j) {
@@ -153,7 +159,7 @@ static void slowJpegDecode(
     for (int k = 0; k != 6; ++k) {
       for (int i = 0; i != 8; ++i) {
         for (int j = 0; j != 8; ++j) {
-          ycbcrss[mcroblk_y][mcroblk_x][k][i][j] = int_of_f4(ycbcrs[k][i][j]);
+          ycbcrss[mcroblk_y][mcroblk_x][k][i][j] += int_of_f4(ycbcrs[k][i][j]);
         }
       }
     }
@@ -363,7 +369,7 @@ void mpeg_parser::render(picbuf_t& picbuf) {
       }
 
 #if DEBUG_LEVEL >= 5
-      if (mcroblk_y==14 && mcroblk_x==0 && pic_count == 1) {
+      if (mcroblk_y==15-1 && mcroblk_x==20-6) {
         printf("\n(%d,%d) RGB\n", mcroblk_y, mcroblk_x);
         for (int y = 0; y != 16; ++y) {
           for (int x = 0; x != 16; ++x) {
@@ -744,7 +750,19 @@ bool mpeg_parser::slice() {
       dprintf5("forward vec (%d,%d)\n",this->f_prd.recon_down,this->f_prd.recon_right);
       this->predCopy(mcroblk_addr, f_pels, *this->F, this->f_prd);
     }
-
+#if DEBUG_LEVEL >= 5
+    if (mcroblk_addr == 218) {
+      for (int k = 0; k != 6; ++k) {
+        dprintf5("k=%d\n",k);
+        for (int y = 0; y != 8; ++y) {
+          for (int x = 0; x != 8; ++x) {
+            fprintf(stderr," %d",f_pels[k][y][x]);
+          }
+          fprintf(stderr,"\n");
+        }
+      }
+    }
+#endif
     if (mcroblk_typ->b_motion) {
       this->readPredInfo(this->pic_cxt.backward, this->pic_cxt.b_f, this->pic_cxt.b_rsiz);
       predCalc(
