@@ -22,69 +22,6 @@
 
 #include "huffman_tbl.h"
 
-static const uint32_t picture_start_code      = 0x00010000;
-static const uint32_t slice_start_code_min_le = 0x00000101;
-static const uint32_t slice_start_code_max_le = 0x000001af;
-static const uint32_t user_data_start_code    = 0xb2010000;
-static const uint32_t sequence_header_code    = 0xb3010000;
-static const uint32_t extension_start_code    = 0xb5010000;
-static const uint32_t sequence_end_code       = 0xb7010000;
-static const uint32_t group_start_code        = 0xb8010000;
-
-static const int16_t default_intra_quantizer_matrix[64] = {
-  8,
-  16, 16,
-  19, 16, 19,
-  22, 22, 22, 22,
-  22, 22, 26, 24, 26,
-  27, 27, 27, 26, 26, 26,
-  26, 27, 27, 27, 29, 29, 29,
-  34, 34, 34, 29, 29, 29, 27, 27,
-  29, 29, 32, 32, 34, 34, 37,
-  38, 37, 35, 35, 34, 35,
-  38, 38, 40, 40, 40,
-  48, 48, 46, 46,
-  56, 56, 58,
-  69, 69,
-  83
-};
-
-static const int16_t default_non_intra_quantizer_matrix[64] = {
-  16, 16, 16, 16, 16, 16, 16, 16,
-  16, 16, 16, 16, 16, 16, 16, 16,
-  16, 16, 16, 16, 16, 16, 16, 16,
-  16, 16, 16, 16, 16, 16, 16, 16,
-  16, 16, 16, 16, 16, 16, 16, 16,
-  16, 16, 16, 16, 16, 16, 16, 16,
-  16, 16, 16, 16, 16, 16, 16, 16,
-  16, 16, 16, 16, 16, 16, 16, 16,
-};
-
-static const int zigzag_idx[8][8] = {
-  {  0,  1,  5,  6, 14, 15, 27, 28 },
-  {  2,  4,  7, 13, 16, 26, 29, 42 },
-  {  3,  8, 12, 17, 25, 30, 41, 43 },
-  {  9, 11, 18, 24, 31, 40, 44, 53 },
-  { 10, 19, 23, 32, 39, 45, 52, 54 },
-  { 20, 22, 33, 38, 46, 51, 55, 60 },
-  { 21, 34, 37, 47, 50, 56, 59, 61 },
-  { 35, 36, 48, 49, 57, 58, 62, 63 }
-};
-
-static const unsigned int picbuf_max = 4;
-static const unsigned int w_max = 768;
-static const unsigned int h_max = 576;
-static const unsigned int w_mcroblk_max = w_max / 16;
-static const unsigned int h_mcroblk_max = h_max / 16;
-static const unsigned int mcroblk_max = w_mcroblk_max * h_mcroblk_max;
-
-inline int sgn(int m) { return (m==0)? 0 : ((m>>31)|1); }
-
-static constexpr int f4_of_double(const double& d) { return static_cast<int>(d * 16.0); }
-static constexpr int f4_of_int(const int& n) { return n << 4; }
-static constexpr int int_of_f4(const int& f) { return f / 16; }
-static constexpr int f4mul(const int& a, const int& b) { return (a*b) / 16; }
-
 static void slow_fast_idct1(int (&vec)[8]) {
   static const double pi = std::acos(-1.0);
   static const int r = f4_of_double(std::sqrt(2.0));
@@ -113,11 +50,11 @@ static void slow_fast_idct1(int (&vec)[8]) {
   vec[4] = d6-d7; vec[5] = d2-d3; vec[6] = d4-d5; vec[7] = d0-d1;
 }
 
-static constexpr uint8_t cut255(int x) { return (x>255? 255 : (x<0? 0 : x)); }
-
 #if DEBUG_LEVEL >= 4
   unsigned int pic_count = 0;
 #endif
+
+static constexpr uint8_t cut255(int x) { return (x>255? 255 : (x<0? 0 : x)); }
 
 static void slow_jpeg_decode(
   uint8_t buf[],
@@ -298,8 +235,9 @@ class mpeg_parser {
   }
 
   // real parsing
+  void decodeIntraBlock(unsigned int mcroblk_addr);
   bool picture();
-  bool slice();
+  template<int pic_cod_typ> bool slice();
 
 public:
   mpeg_parser(const char *filename)
@@ -356,6 +294,73 @@ void mpeg_parser::skipExtensionsAndUserData() {
   }
 }
 
+void mpeg_parser::decodeIntraBlock(unsigned int mcroblk_addr) {
+  DEBUG_TRACE("");
+
+  this->mcroblk_cxts[mcroblk_addr].past_intra_addr = this->pic_cxt.past_intra_addr;
+  this->pic_cxt.past_intra_addr = mcroblk_addr;
+  this->mcroblk_cxts[mcroblk_addr].quantizer_scale = this->pic_cxt.quantizer_scale;
+
+  dprintf5("macroblock %d; quantizer_scale: %d\n", mcroblk_addr, this->mcroblk_cxts[mcroblk_addr].quantizer_scale);
+  for (int k = 0; k != 6; ++k) {
+    int16_t (&dct_zz)[8*8] = this->mcroblk_cxts[mcroblk_addr].dct_zz[k];
+    dprintf5("   block %d:\n", k);
+    // decode DC
+    {
+      uint32_t m = this->peek16(this->bitpos);
+      int len = huff_dc_ssss[k][m][0];
+      int dc_len = huff_dc_ssss[k][m][1];
+      this->bitpos += len;
+      if (dc_len == 0) {
+        dct_zz[0] = 0;
+        dprintf5("      dc_len=0\n");
+      } else {
+        int dc_diff = this->peekInt_be(this->bitpos&(~7u)) << (this->bitpos&7);
+        int msk = ~(dc_diff >> 31);
+        dct_zz[0] = ((1<<dc_len)^msk) + (2&msk) + (dc_diff>>(32-dc_len));
+        dprintf5("      dc_len=%d, diff=%d\n", dc_len, ((unsigned)dc_diff)>>(32-dc_len));
+      }
+      this->bitpos += dc_len;
+    }
+    // decode AC
+    int i = 0;
+    for (;;) {
+      uint32_t m = this->peek16(this->bitpos);
+      if ((m&0xc000) == 0x8000) { // EOB = '10'
+        this->bitpos += 2;
+        break;
+      } else {
+        int len, run, level;
+        if ((m&0xfc00) == 0x0400) { // escape = '0000 01'
+          run = this->peek16(this->bitpos+6) >> (16 - 6);
+          int m_ = this->peek16(this->bitpos+12);
+          int msk = ((m_ << 16) >> 31) & 0xffffff00;
+          if (m_ & 0x7f00) {
+            level = msk | (m_ >> 8);
+            len = 6 + 6 + 8;
+          } else {
+            level = msk | m_;
+            len = 6 + 6 + 16;
+          }
+        } else {
+          len = huff_dc_coef_next[m][0];
+          run = huff_dc_coef_next[m][1];
+          level = huff_dc_coef_next[m][2];
+          if (TEST_BIT(this->bitbuf, this->bitpos+len))
+            level = -level;
+          ++len;
+        }
+        this->bitpos += len;
+        i += run + 1;
+        assert(i <= 63);
+        dct_zz[i] = level;
+        dprintf5("      coef_next: run=%d, level=%d; m=%04x\n", run, level, m);
+      }
+    }
+  }
+}
+
+template<int pic_cod_typ>
 bool mpeg_parser::slice() {
   DEBUG_TRACE("");
 
@@ -376,109 +381,46 @@ bool mpeg_parser::slice() {
     this->bitpos += 9;
   ++this->bitpos;
 
-  dprintf5("%08x begin marcoblock\n", this->bitpos);
-  // XXX TODO: macroblock layer
-
   unsigned int mcroblk_addr = (this->pic_cxt.slice_vpos - 1)*this->video_cxt.w_mcroblk_cnt - 1;
-  int past_intra_addr = -2;
+  this->pic_cxt.past_intra_addr = -2;
 
-  if (this->pic_cxt.pic_cod_typ == 1) {
-    while ((this->bitbuf[this->bitpos>>3] & (0xff >> (this->bitpos&7))) != 0
-        || (this->peekInt((this->bitpos+7)&(~7u))&0x00ffffff) != 0x00010000)
-    {
-      while ((this->peek16(this->bitpos)>>5) == 0x000f)
-        this->bitpos += 11;
-      while ((this->peek16(this->bitpos)>>5) == 0x0008) {
-        mcroblk_addr += 33;
-        this->bitpos += 11;
-      }
-      { // macroblock_address_increment
-        uint32_t m = this->peek16(this->bitpos);
-        mcroblk_addr += huff_mcroblk_addrinc[m][1];
-        this->bitpos += huff_mcroblk_addrinc[m][0];
-      }
-      const mcroblk_typ_t *mcroblk_typ;
-      { // macroblock_type
-        uint32_t m = this->peek16(this->bitpos);
-        mcroblk_typ = &huff_mcroblk_typ[this->pic_cxt.pic_cod_typ][m];
-        this->bitpos += huff_mcroblk_typ[this->pic_cxt.pic_cod_typ][m].len;
-      }
-      if (mcroblk_typ->quant) {
-        this->pic_cxt.quantizer_scale = (this->peek16(this->bitpos)>>11)&31;
-        this->bitpos += 5;
-      }
-      this->mcroblk_cxts[mcroblk_addr].past_intra_addr = past_intra_addr;
-      past_intra_addr = mcroblk_addr;
-      this->mcroblk_cxts[mcroblk_addr].quantizer_scale = this->pic_cxt.quantizer_scale;
-
-      dprintf5("macroblock %d; quantizer_scale: %d\n", mcroblk_addr, this->mcroblk_cxts[mcroblk_addr].quantizer_scale);
-      for (int k = 0; k != 6; ++k) {
-        int16_t (&dct_zz)[8*8] = this->mcroblk_cxts[mcroblk_addr].dct_zz[k];
-        dprintf5("   block %d:\n", k);
-        // decode DC
-        {
-          uint32_t m = this->peek16(this->bitpos);
-          int len = huff_dc_ssss[k][m][0];
-          int dc_len = huff_dc_ssss[k][m][1];
-          this->bitpos += len;
-          if (dc_len == 0) {
-            dct_zz[0] = 0;
-            dprintf5("      dc_len=0\n");
-          } else {
-            int dc_diff = this->peekInt_be(this->bitpos&(~7u)) << (this->bitpos&7);
-            int msk = ~(dc_diff >> 31);
-            dct_zz[0] = ((1<<dc_len)^msk) + (2&msk) + (dc_diff>>(32-dc_len));
-            dprintf5("      dc_len=%d, diff=%d\n", dc_len, ((unsigned)dc_diff)>>(32-dc_len));
-          }
-          this->bitpos += dc_len;
-        }
-        // decode AC
-        int i = 0;
-        for (;;) {
-          uint32_t m = this->peek16(this->bitpos);
-          if ((m&0xc000) == 0x8000) { // EOB = '10'
-            this->bitpos += 2;
-            break;
-          } else {
-            int len, run, level;
-            if ((m&0xfc00) == 0x0400) { // escape = '0000 01'
-              run = this->peek16(this->bitpos+6) >> (16 - 6);
-              int m_ = this->peek16(this->bitpos+12);
-              int msk = ((m_ << 16) >> 31) & 0xffffff00;
-              if (m_ & 0x7f00) {
-                level = msk | (m_ >> 8);
-                len = 6 + 6 + 8;
-              } else {
-                level = msk | m_;
-                len = 6 + 6 + 16;
-              }
-            } else {
-              len = huff_dc_coef_next[m][0];
-              run = huff_dc_coef_next[m][1];
-              level = huff_dc_coef_next[m][2];
-              if (TEST_BIT(this->bitbuf, this->bitpos+len))
-                level = -level;
-              ++len;
-            }
-            this->bitpos += len;
-            i += run + 1;
-            assert(i <= 63);
-            dct_zz[i] = level;
-            dprintf5("      coef_next: run=%d, level=%d; m=%04x\n", run, level, m);
-          }
-        }
-      }
+  while ((this->bitbuf[this->bitpos>>3] & (0xff >> (this->bitpos&7))) != 0
+      || (this->peekInt((this->bitpos+7)&(~7u))&0x00ffffff) != 0x00010000)
+  {
+    while ((this->peek16(this->bitpos)>>5) == 0x000f)
+      this->bitpos += 11;
+    while ((this->peek16(this->bitpos)>>5) == 0x0008) {
+      mcroblk_addr += 33;
+      this->bitpos += 11;
     }
-    this->next_start_code();
-  } else {
-    while ((this->bitbuf[this->bitpos>>3] & (0xff >> (this->bitpos&7))) != 0
-        || (this->peekInt((this->bitpos+7)&(~7u))&0x00ffffff) != 0x00010000)
-    {
-      // XXX TODO: support B-frame and P-frame
-      // skip it for now
-      this->next_start_code();
+    if (pic_cod_typ == 2) {
+      // XXX TODO
+      throw std::logic_error("P frame skip not implemented");
+    } else if (pic_cod_typ == 3) {
+      // XXX TODO
+      throw std::logic_error("B frame skip not implemented");
+    }
+    { // macroblock_address_increment
+      uint32_t m = this->peek16(this->bitpos);
+      mcroblk_addr += huff_mcroblk_addrinc[m][1];
+      this->bitpos += huff_mcroblk_addrinc[m][0];
+    }
+    const mcroblk_typ_t *mcroblk_typ;
+    { // macroblock_type
+      uint32_t m = this->peek16(this->bitpos);
+      mcroblk_typ = &huff_mcroblk_typ[this->pic_cxt.pic_cod_typ][m];
+      this->bitpos += huff_mcroblk_typ[this->pic_cxt.pic_cod_typ][m].len;
+    }
+    if (mcroblk_typ->quant) {
+      this->pic_cxt.quantizer_scale = (this->peek16(this->bitpos)>>11)&31;
+      this->bitpos += 5;
+    }
+    if (mcroblk_typ->intra) {
+      this->decodeIntraBlock(mcroblk_addr);
+      continue; // XXX TODO check correctness
     }
   }
+  this->next_start_code();
 
   return true;
 }
@@ -538,9 +480,9 @@ bool mpeg_parser::picture() {
   if (this->pic_cxt.pic_cod_typ != 3) { // I frame or P frame
     std::swap(this->F, this->B);
     // XXX TODO: display this->F
-    //this->debug_output(this->F->rgb);
-    gldraw(this->F->rgb);
-#if 1
+    this->debug_output(this->F->rgb);
+    //gldraw(this->F->rgb);
+#if DEBUG_LEVEL > 1
     static int ___cnt = 0;
     if (___cnt >= DEBUG_CNT)
       throw std::runtime_error("USER REQUEST TERMINATION");
@@ -550,13 +492,23 @@ bool mpeg_parser::picture() {
   }
 
   std::memset(this->mcroblk_cxts, 0, sizeof(this->mcroblk_cxts));
-  if (this->pic_cxt.pic_cod_typ == 1) {
-    std::memset(this->C, 0, sizeof(picbuf_t));
-  }
+  std::memset(this->C, 0, sizeof(picbuf_t));
   // slices
-  for (;;) {
-    bool success = this->slice();
-    if (not success) break;
+  if (unlikely(this->pic_cxt.pic_cod_typ == 1)) {
+    for (;;) {
+      bool success = this->slice<1>();
+      if (not success) break;
+    }
+  } else if (this->pic_cxt.pic_cod_typ == 2) {
+    for (;;) {
+      bool success = this->slice<2>();
+      if (not success) break;
+    }
+  } else {
+    for (;;) {
+      bool success = this->slice<3>();
+      if (not success) break;
+    }
   }
 
   slow_jpeg_decode(
@@ -567,8 +519,8 @@ bool mpeg_parser::picture() {
   );
 
   if (this->pic_cxt.pic_cod_typ == 3) { // B frame
-    // XXX TODO: display this->C
-    throw std::logic_error("B frame display not implemented yet");
+    this->debug_output(this->C->rgb);
+    //gldraw(this->C->rgb);
   } else { // I frame or P frame
     std::swap(this->C, this->B);
   }
@@ -650,7 +602,6 @@ void mpeg_parser::parseGOPEnd() {
       if (not success) break;
     }
   }
-
   // end of groups
 
   // end
@@ -659,15 +610,13 @@ void mpeg_parser::parseGOPEnd() {
   }
 }
 
-
-
 int main() {
   try {
     {
       mpeg_parser *m1v = new mpeg_parser("../phw_mpeg/I_ONLY.M1V");
       m1v->parseInfo();
-      glrun(m1v->getHeight(), m1v->getWidth());
-#if DEBUG_LEVEL == 0
+//      glrun(m1v->getHeight(), m1v->getWidth());
+#if DEBUG_LEVEL == 0 // repeatly play
       delete m1v;
     }
     for (;;) {
