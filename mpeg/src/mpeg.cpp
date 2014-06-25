@@ -479,9 +479,11 @@ bool mpeg_parser::picture() {
 
   if (this->pic_cxt.pic_cod_typ != 3) { // I frame or P frame
     std::swap(this->F, this->B);
-    // XXX TODO: display this->F
+#if defined(DISPLAY)
+    gldraw(this->F->rgb);
+#else
     this->debug_output(this->F->rgb);
-    //gldraw(this->F->rgb);
+#endif
 #if DEBUG_LEVEL > 1
     static int ___cnt = 0;
     if (___cnt >= DEBUG_CNT)
@@ -519,8 +521,11 @@ bool mpeg_parser::picture() {
   );
 
   if (this->pic_cxt.pic_cod_typ == 3) { // B frame
+#if defined(DISPLAY)
+    gldraw(this->C->rgb);
+#else
     this->debug_output(this->C->rgb);
-    //gldraw(this->C->rgb);
+#endif
   } else { // I frame or P frame
     std::swap(this->C, this->B);
   }
@@ -611,16 +616,19 @@ void mpeg_parser::parseGOPEnd() {
 }
 
 int main() {
+  const char *clipname = "../phw_mpeg/I_ONLY.M1V";
   try {
     {
-      mpeg_parser *m1v = new mpeg_parser("../phw_mpeg/I_ONLY.M1V");
+      mpeg_parser *m1v = new mpeg_parser(clipname);
       m1v->parseInfo();
-//      glrun(m1v->getHeight(), m1v->getWidth());
-#if DEBUG_LEVEL == 0 // repeatly play
+#if defined(DISPLAY)
+      glrun(m1v->getHeight(), m1v->getWidth());
+#endif
+#if !defined(DISPLAY) && DEBUG_LEVEL==0 // repeatly play
       delete m1v;
     }
     for (;;) {
-      mpeg_parser *m1v = new mpeg_parser("../phw_mpeg/I_ONLY.M1V");
+      mpeg_parser *m1v = new mpeg_parser(clipname);
       m1v->parseInfo();
 #endif
       m1v->parseGOPEnd();

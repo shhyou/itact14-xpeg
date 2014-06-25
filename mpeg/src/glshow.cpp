@@ -68,7 +68,7 @@ static DWORD WINAPI runGlutMain(LPVOID) {
 
   glutInit(&argc, argv);
   glutInitDisplayMode(GLUT_DOUBLE|GLUT_RGB);
-  glutInitWindowSize(1003, 565);
+  glutInitWindowSize(width, height);
   glutInitWindowPosition(10, 10);
   glutCreateWindow("MPEG-1");
 
