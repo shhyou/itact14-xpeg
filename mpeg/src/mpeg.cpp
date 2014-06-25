@@ -77,6 +77,9 @@ static void slowJpegDecode(
     mcroblk_cxt_t &mcroblk_cxt = mcroblk_cxts[t];
     if (mcroblk_cxt.flags & MACROBLOCK_SKIPPED) {
       dprintf5("mcroblk %d: skipped\n", t);
+      dct_dc_past[0] = 128*8,
+      dct_dc_past[4] = 128*8,
+      dct_dc_past[5] = 128*8;
       if (++mcroblk_x == video_cxt->w_mcroblk_cnt) {
         mcroblk_x = 0;
         ++mcroblk_y;
@@ -104,6 +107,9 @@ static void slowJpegDecode(
           }
         }
       } else {
+        dct_dc_past[0] = 128*8,
+        dct_dc_past[4] = 128*8,
+        dct_dc_past[5] = 128*8;
         for (int i = 0; i != 64; ++i) {
           dct_recon[i] = ((2*dct_zz[i] + sgn(dct_zz[i]))
                             * static_cast<int>(mcroblk_cxt.quantizer_scale)
@@ -136,7 +142,7 @@ static void slowJpegDecode(
           ycbcr[i][j] = ycbcr[i][j] / 8;
 
 #if DEBUG_LEVEL >= 5
-      if (mcroblk_y==15-1 && mcroblk_x==20-6) {
+      if (mcroblk_y==0 && mcroblk_x==0) {
         printf("\nt =%2d k=%d dct_recon\n", t, k);
         for (int i = 0; i < 8; ++i) {
           for (int j = 0; j < 8; ++j) {
@@ -163,6 +169,22 @@ static void slowJpegDecode(
         }
       }
     }
+
+#if DEBUG_LEVEL >= 5
+    if (mcroblk_y==0 && mcroblk_x==0) {
+      printf("\nafter added:\n");
+      for (int k = 0; k != 6; ++k) {
+        printf("t =%2d k=%d ycbcr\n", t, k);
+        for (int i = 0; i < 8; ++i) {
+          for (int j = 0; j < 8; ++j) {
+            printf(" %3d", ycbcrss[mcroblk_y][mcroblk_x][i][j]);
+          }
+          puts("");
+        }
+      }
+    }
+#endif
+
     if (++mcroblk_x == video_cxt->w_mcroblk_cnt) {
       mcroblk_x = 0;
       ++mcroblk_y;
@@ -369,7 +391,7 @@ void mpeg_parser::render(picbuf_t& picbuf) {
       }
 
 #if DEBUG_LEVEL >= 5
-      if (mcroblk_y==15-1 && mcroblk_x==20-6) {
+      if (mcroblk_y==0 && mcroblk_x==0) {
         printf("\n(%d,%d) RGB\n", mcroblk_y, mcroblk_x);
         for (int y = 0; y != 16; ++y) {
           for (int x = 0; x != 16; ++x) {
@@ -531,13 +553,11 @@ void mpeg_parser::decodeNonIntraBlock(unsigned int mcroblk_addr) {
 void mpeg_parser::copyMacroblock(picbuf_t &picbuf, size_t mcroblk_addr) {
   int y0 = mcroblk_addr/this->video_cxt.w_mcroblk_cnt;
   int x0 = mcroblk_addr%this->video_cxt.w_mcroblk_cnt;
-  for (int y = 0; y < 16; ++y) {
-    std::memcpy(
-      this->C->ycbcr[y0+y][x0],
-      picbuf.ycbcr[y0+y][x0],
-      sizeof(picbuf.ycbcr[0][0])
-    );
-  }
+  std::memcpy(
+    this->C->ycbcr[y0][x0],
+    picbuf.ycbcr[y0][x0],
+    sizeof(picbuf.ycbcr[0][0])
+  );
 }
 
 void mpeg_parser::copyMacroblock2(size_t mcroblk_addr) {
@@ -751,7 +771,7 @@ bool mpeg_parser::slice() {
       this->predCopy(mcroblk_addr, f_pels, *this->F, this->f_prd);
     }
 #if DEBUG_LEVEL >= 5
-    if (mcroblk_addr == 218) {
+    if (mcroblk_addr == 0) {
       for (int k = 0; k != 6; ++k) {
         dprintf5("k=%d\n",k);
         for (int y = 0; y != 8; ++y) {
