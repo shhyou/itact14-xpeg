@@ -22,7 +22,8 @@ void gldraw(uint8_t buf[]) {
   std::memcpy(local_buf, buf, padded_width*height);
 
 #if DEBUG_LEVEL == 0
-  if ((std::clock()-st) < 10)
+  clock_t dif = std::clock() - st;
+  if (dif < 10)
     Sleep(10); // XXX TODO hack: use inter-thread communication next time
 #endif
 }
