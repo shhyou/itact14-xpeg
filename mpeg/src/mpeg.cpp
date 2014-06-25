@@ -142,7 +142,7 @@ static void slowJpegDecode(
           ycbcr[i][j] = ycbcr[i][j] / 8;
 
 #if DEBUG_LEVEL >= 5
-      if (mcroblk_y==0 && mcroblk_x==0) {
+      if (mcroblk_y==15-1 && mcroblk_x==1) {
         printf("\nt =%2d k=%d dct_recon\n", t, k);
         for (int i = 0; i < 8; ++i) {
           for (int j = 0; j < 8; ++j) {
@@ -170,14 +170,14 @@ static void slowJpegDecode(
       }
     }
 
-#if DEBUG_LEVEL >= 5
-    if (mcroblk_y==0 && mcroblk_x==0) {
+#if 0 && DEBUG_LEVEL >= 5
+    if (mcroblk_y==15-1 && mcroblk_x==1) {
       printf("\nafter added:\n");
       for (int k = 0; k != 6; ++k) {
         printf("t =%2d k=%d ycbcr\n", t, k);
         for (int i = 0; i < 8; ++i) {
           for (int j = 0; j < 8; ++j) {
-            printf(" %3d", ycbcrss[mcroblk_y][mcroblk_x][i][j]);
+            printf(" %3d", ycbcrss[mcroblk_y][mcroblk_x][k][i][j]);
           }
           puts("");
         }
@@ -391,7 +391,7 @@ void mpeg_parser::render(picbuf_t& picbuf) {
       }
 
 #if DEBUG_LEVEL >= 5
-      if (mcroblk_y==0 && mcroblk_x==0) {
+      if (mcroblk_y==15-1 && mcroblk_x==1) {
         printf("\n(%d,%d) RGB\n", mcroblk_y, mcroblk_x);
         for (int y = 0; y != 16; ++y) {
           for (int x = 0; x != 16; ++x) {
@@ -609,16 +609,30 @@ inline void mpeg_parser::predCopy(
   predict_t &prd)
 {
   DEBUG_TRACEn(5,"");
+  static const int lim[6] = {16,16,16,16,8,8};
 
   const int mcroblk_y = mcroblk_addr/this->video_cxt.w_mcroblk_cnt;
   const int mcroblk_x = mcroblk_addr%this->video_cxt.w_mcroblk_cnt;
-  int zzz;
+#if DEBUG_LEVEL >= 5
+  if (mcroblk_addr == 281) {
+    for (int k = 0; k != 6; ++k) {
+      fprintf(stderr,"  k=%d\n",k);
+      for (int i = 0; i != 8; ++i) {
+        fprintf(stderr,"  ");
+        for (int j = 0; j != 8; ++j) {
+          fprintf(stderr, " %d", pel_past.ycbcr[0][0][k][i][j]);
+        }
+        fprintf(stderr,"\n");
+      }
+    }
+  }
+#endif
   for (int k = 0; k != 6; ++k) {
     int right =      k<4? (prd.recon_right>>1) : ((prd.recon_right/2)>>1);
     int down =       k<4? (prd.recon_down>>1) : ((prd.recon_down/2)>>1);
     int right_half = k<4? (prd.recon_right-2*right) : (prd.recon_right/2 - 2*right);
     int down_half=   k<4? (prd.recon_down-2*down) : (prd.recon_down/2 - 2*down);
-    static const auto past = [&](int y, int x) -> int {
+    const auto past = [&](int y, int x) -> int {
       if (k < 4) {
         int y0 = mcroblk_y*16, x0 = mcroblk_x*16;
         y0 += 8*(k/2);
@@ -635,32 +649,37 @@ inline void mpeg_parser::predCopy(
 
         int my = new_y/8, mx = new_x/8;
         int y_ = new_y%8, x_ = new_x%8;
+#if DEBUG_LEVEL >= 6
+        if (mcroblk_addr==281){
+          fprintf(stderr,"k=%d,my=%d,mx=%d,(y_,x_)=(%d,%d) => %d\n",k,my,mx,y_,x_,pel_past.ycbcr[my][mx][k][y_][x_]);
+        }
+#endif
         return pel_past.ycbcr[my][mx][k][y_][x_];
       }
     };
     if (!right_half && !down_half) {
-      for (int y = 0; y != 16; ++y) {
-        for (int x = 0; x != 16; ++x) {
+      for (int y = 0; y != lim[k]; ++y) {
+        for (int x = 0; x != lim[k]; ++x) {
           pel[k][y][x] = past(y+down,x+right);
         }
       }
     } else if (!right_half && down_half) {
-      for (int y = 0; y != 16; ++y) {
-        for (int x = 0; x != 16; ++x) {
+      for (int y = 0; y != lim[k]; ++y) {
+        for (int x = 0; x != lim[k]; ++x) {
           pel[k][y][x] =
             (past(y+down,x+right) + past(y+down+1,x+right))/2;
         }
       }
     } else if (right_half && !down_half) {
-      for (int y = 0; y != 16; ++y) {
-        for (int x = 0; x != 16; ++x) {
+      for (int y = 0; y != lim[k]; ++y) {
+        for (int x = 0; x != lim[k]; ++x) {
           pel[k][y][x] =
             (past(y+down,x+right) + past(y+down,x+right+1))/2;
         }
       }
     } else if (right_half && down_half) {
-      for (int y = 0; y != 16; ++y) {
-        for (int x = 0; x != 16; ++x) {
+      for (int y = 0; y != lim[k]; ++y) {
+        for (int x = 0; x != lim[k]; ++x) {
           pel[k][y][x] =
             ( past(y+down,x+right)   + past(y+down+1,x+right)
             + past(y+down,x+right+1) + past(y+down+1,x+right+1))/4;
@@ -742,8 +761,8 @@ bool mpeg_parser::slice() {
     // special case: process intra block
     if (mcroblk_typ->intra) {
       this->decodeIntraBlock(mcroblk_addr);
+      std::memset(&this->f_prev_prd, 0, sizeof(predict_t));
       if (pic_cod_typ == 3) {
-        std::memset(&this->f_prev_prd, 0, sizeof(predict_t));
         std::memset(&this->b_prev_prd, 0, sizeof(predict_t));
       }
       continue;
@@ -756,27 +775,31 @@ bool mpeg_parser::slice() {
     if (mcroblk_typ->f_motion) {
       this->readPredInfo(this->pic_cxt.forward, this->pic_cxt.f_f, this->pic_cxt.f_rsiz);
     } else {
-      if (pic_cod_typ == 2) { // P-frame reset
-        std::memset(&this->f_prd, 0, sizeof(predict_t));
-      } else if (pic_cod_typ == 3) {
+      if (pic_cod_typ == 3) { // B-frame
         this->f_prd = this->f_prev_prd;
       }
     }
-    if (pic_cod_typ==2 || mcroblk_typ->f_motion) {
-      predCalc(
-        this->pic_cxt.f_fullpel_vec, this->pic_cxt.f_f,
-        this->f_prev_prd, this->f_prd, this->pic_cxt.forward
-      );
-      dprintf5("forward vec (%d,%d)\n",this->f_prd.recon_down,this->f_prd.recon_right);
+    if (pic_cod_typ == 2) {
+      if (mcroblk_typ->f_motion) {
+        predCalc(
+          this->pic_cxt.f_fullpel_vec, this->pic_cxt.f_f,
+          this->f_prev_prd, this->f_prd, this->pic_cxt.forward
+        );
+        dprintf5("forward vec (%d,%d) <- (%d,%d)\n",this->f_prd.recon_down,this->f_prd.recon_right,this->f_prev_prd.recon_down,this->f_prev_prd.recon_right);
+      } else {
+        std::memset(&this->f_prd, 0, sizeof(predict_t));
+        dprintf5("forward vec (%d,%d) .. (%d,%d)\n",this->f_prd.recon_down,this->f_prd.recon_right);
+      }
       this->predCopy(mcroblk_addr, f_pels, *this->F, this->f_prd);
     }
 #if DEBUG_LEVEL >= 5
-    if (mcroblk_addr == 0) {
+    if (mcroblk_addr == 281) {
+      fprintf(stderr,"macroblk_addr=%d\n",mcroblk_addr);
       for (int k = 0; k != 6; ++k) {
-        dprintf5("k=%d\n",k);
+        fprintf(stderr," k=%d\n",k);
         for (int y = 0; y != 8; ++y) {
           for (int x = 0; x != 8; ++x) {
-            fprintf(stderr," %d",f_pels[k][y][x]);
+            fprintf(stderr,"  %d",f_pels[k][y][x]);
           }
           fprintf(stderr,"\n");
         }
