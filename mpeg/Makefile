@@ -1,7 +1,7 @@
 -include Makefile.common
 
-CXXFLAGS = -std=c++11 -MMD -g -DDEBUG_LEVEL=5 -DDEBUG_CNT=10 -Wall -Wshadow -Wextra -Wconversion -pedantic -Iinclude
-#CXXFLAGS = -std=c++11 -MMD -O2 -DDISPLAY -DDEBUG_LEVEL=0 -DDEBUG_CNT=1000 -Wall -Wshadow -Wextra -pedantic -Iinclude
+#CXXFLAGS = -std=c++11 -MMD -g -DDEBUG_LEVEL=2 -DDEBUG_CNT=5 -Wall -Wshadow -Wextra -Wconversion -pedantic -Iinclude
+CXXFLAGS = -std=c++11 -MMD -O2 -DDISPLAY -DDEBUG_LEVEL=0 -DDEBUG_CNT=1000 -Wall -Wshadow -Wextra -pedantic -Iinclude
 CXX = g++
 LIBS = -lfreeglut -lopengl32 -lglew32
 

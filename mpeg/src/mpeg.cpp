@@ -273,7 +273,7 @@ class mpeg_parser {
   void load_quantizer_matrix(int16_t (&mat)[64]);
   void copyMacroblock(picbuf_t &picbuf, size_t mcroblk_addr);
   void copyMacroblock2(size_t mcroblk_addr);
-  void predCopy(uint8_t (&pel)[16][16][3], uint8_t past[], predict_t &prd);
+  void predCopy(unsigned int mcroblk_addr, int (&pel)[6][8][8], picbuf_t &past, predict_t &prd);
 
   void next_start_code() {
     this->bitpos = (this->bitpos+7u)&(~7u);
@@ -582,28 +582,61 @@ inline void mpeg_parser::readPredInfo(
 }
 
 inline void mpeg_parser::predCopy(
-//  unsigned int mcroblk_addr,
-  uint8_t (&pel)[16][16][3],
-  uint8_t src[],
+  unsigned int mcroblk_addr,
+  int (&pel)[6][8][8],
+  picbuf_t &pel_past,
   predict_t &prd)
 {
+  const int mcroblk_y = mcroblk_addr/this->video_cxt.w_mcroblk_cnt;
+  const int mcroblk_x = mcroblk_addr%this->video_cxt.w_mcroblk_cnt;
+  int zzz;
+  for (int k = 0; k != 6; ++k) {
+    int right =      k<4? (prd.recon_right>>1) : ((prd.recon_right/2)>>1);
+    int down =       k<4? (prd.recon_down>>1) : ((prd.recon_down/2)>>1);
+    int right_half = k<4? (prd.recon_right-2*right) : (prd.recon_right/2 - 2*right);
+    int down_half=   k<4? (prd.recon_down-2*down) : (prd.recon_down/2 - 2*down);
+    static const auto past = [&](int y, int x) -> int {
+      int y0 = mcroblk_y*16, x0 = mcroblk_x*16;
+      if (k < 4) {
+        y0 += 8*(k/2);
+        x0 += 8*(k%2);
+      }
+      int new_y = y+y0, new_x = x+x0;
 
-  /* XXX TODO: hack! chrominance was wrong! */
-  prd.right = prd.recon_right >> 1;
-  prd.down = prd.recon_down >> 1;
-  prd.right_half = prd.recon_right - 2*prd.right;
-  prd.down_half= prd.recon_down - 2*prd.down;
-
-  throw std::runtime_error("predCopy not impl'd");
-  if (!prd.right_half && !prd.down_half) {
-    for (int y = 0; y != 16; ++y) {
-      for (int x = 0; x != 16; ++x) {
-//        pel[y][x]
+      int my = new_y/16, mx = new_x/16;
+      int k_ = (new_y%16/8)*2+(new_x%16/8);
+      int y_ = (new_y%8), x_ = (new_x%8);
+      return pel_past.ycbcr[my][mx][k_][y_][x_];
+    };
+    if (!right_half && !down_half) {
+      for (int y = 0; y != 16; ++y) {
+        for (int x = 0; x != 16; ++x) {
+          pel[k][y][x] = past(y+down,x+right);
+        }
+      }
+    } else if (!right_half && down_half) {
+      for (int y = 0; y != 16; ++y) {
+        for (int x = 0; x != 16; ++x) {
+          pel[k][y][x] =
+            (past(y+down,x+right) + past(y+down+1,x+right))/2;
+        }
+      }
+    } else if (right_half && !down_half) {
+      for (int y = 0; y != 16; ++y) {
+        for (int x = 0; x != 16; ++x) {
+          pel[k][y][x] =
+            (past(y+down,x+right) + past(y+down,x+right+1))/2;
+        }
+      }
+    } else if (right_half && down_half) {
+      for (int y = 0; y != 16; ++y) {
+        for (int x = 0; x != 16; ++x) {
+          pel[k][y][x] =
+            ( past(y+down,x+right)   + past(y+down+1,x+right)
+            + past(y+down,x+right+1) + past(y+down+1,x+right+1))/4;
+        }
       }
     }
-  } else if (!prd.right_half && prd.down_half) {
-  } else if (prd.right_half && !prd.down_half) {
-  } else if (prd.right_half && prd.down_half) {
   }
 }
 
@@ -685,22 +718,24 @@ bool mpeg_parser::slice() {
       continue;
     }
 
-    uint8_t f_pels[16][16][3];
-    uint8_t b_pels[16][16][3];
+    int f_pels[6][8][8];
+    int b_pels[6][8][8];
 
     if (mcroblk_typ->f_motion) {
       this->readPredInfo(this->pic_cxt.forward, this->pic_cxt.f_f, this->pic_cxt.f_rsiz);
-      predCalc(
-        this->pic_cxt.f_fullpel_vec, this->pic_cxt.f_f,
-        this->f_prev_prd, this->f_prd, this->pic_cxt.forward
-      );
-//      this->predCopy(f_pels, this->F->rgb, this->f_prd);
     } else {
       if (pic_cod_typ == 2) { // P-frame reset
         std::memset(&this->f_prd, 0, sizeof(predict_t));
       } else if (pic_cod_typ == 3) {
         this->f_prd = this->f_prev_prd;
       }
+    }
+    if (pic_cod_typ==2 || mcroblk_typ->f_motion) {
+      predCalc(
+        this->pic_cxt.f_fullpel_vec, this->pic_cxt.f_f,
+        this->f_prev_prd, this->f_prd, this->pic_cxt.forward
+      );
+      this->predCopy(mcroblk_addr, f_pels, *this->F, this->f_prd);
     }
 
     if (mcroblk_typ->b_motion) {
@@ -709,7 +744,7 @@ bool mpeg_parser::slice() {
         this->pic_cxt.b_fullpel_vec, this->pic_cxt.b_f,
         this->b_prd, this->b_prev_prd, this->pic_cxt.backward
       );
-//      this->predCopy(b_pels, this->B->rgb, this->b_prd);
+      this->predCopy(mcroblk_addr, b_pels, *this->B, this->b_prd);
     } else {
       if (pic_cod_typ == 2) { // P-frame reset
         std::memset(&this->b_prd, 0, sizeof(predict_t));
@@ -727,8 +762,33 @@ bool mpeg_parser::slice() {
     }
 
     this->decodeNonIntraBlock(mcroblk_addr);
-    // XXX TODO: copy reconstructed block
-    throw std::logic_error("TODO: copy reconstructed block");
+    {
+      int mcroblk_y = mcroblk_addr/this->video_cxt.w_mcroblk_cnt;
+      int mcroblk_x = mcroblk_addr%this->video_cxt.w_mcroblk_cnt;
+      if (pic_cod_typ == 2) {
+        std::memcpy(
+          this->C->ycbcr[mcroblk_y][mcroblk_x],
+          f_pels,
+          sizeof(this->C->ycbcr[mcroblk_y][mcroblk_x])
+        );
+      } else if (mcroblk_typ->f_motion && mcroblk_typ->b_motion) {
+        for (int k = 0; k != 6; ++k) {
+          for (int y = 0; y != 8; ++y) {
+            for (int x = 0; x != 8; ++x) {
+              this->C->ycbcr[mcroblk_y][mcroblk_x][k][y][x] =
+                (f_pels[k][y][x] + b_pels[k][y][x])/2;
+            }
+          }
+        }
+      } else {
+        std::memcpy(
+          this->C->ycbcr[mcroblk_y][mcroblk_x],
+          mcroblk_typ->f_motion? f_pels : b_pels,
+          sizeof(this->C->ycbcr[mcroblk_y][mcroblk_x])
+        );
+      }
+    }
+
     this->f_prev_prd = this->f_prd;
     this->b_prev_prd = this->b_prd;
   }

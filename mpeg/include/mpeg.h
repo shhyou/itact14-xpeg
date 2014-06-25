@@ -75,8 +75,6 @@ struct mcroblk_cxt_t {
 struct predict_t {
   int recon_right;
   int recon_down;
-  int right, right_half;
-  int down, down_half;
 };
 
 static const std::int16_t default_intra_quantizer_matrix[64] = {
