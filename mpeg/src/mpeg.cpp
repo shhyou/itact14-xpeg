@@ -22,7 +22,7 @@
 
 #include "huffman_tbl.h"
 
-static void slow_fast_idct1(int (&vec)[8]) {
+static void slowFastIdct1(int (&vec)[8]) {
   static const double pi = std::acos(-1.0);
   static const int r = f4_of_double(std::sqrt(2.0));
   static const int a = f4_of_double(std::sqrt(2.0) * std::cos(3.0 * pi / 8.0));
@@ -56,7 +56,7 @@ static void slow_fast_idct1(int (&vec)[8]) {
 
 static constexpr uint8_t cut255(int x) { return (x>255? 255 : (x<0? 0 : x)); }
 
-static void slow_jpeg_decode(
+static void slowJpegDecode(
   uint8_t buf[],
   video_cxt_t *video_cxt,
   pic_cxt_t *,
@@ -115,12 +115,12 @@ static void slow_jpeg_decode(
 
       // fast IDCT
       for (int i = 0; i != 8; ++i)
-        slow_fast_idct1(ycbcr[i]);
+        slowFastIdct1(ycbcr[i]);
       for (int i = 0; i != 8; ++i)
         for (int j = i+1; j != 8; ++j)
           std::swap(ycbcr[i][j], ycbcr[j][i]);
       for (int i = 0; i != 8; ++i)
-        slow_fast_idct1(ycbcr[i]);
+        slowFastIdct1(ycbcr[i]);
       for (int i = 0; i != 8; ++i)
         for (int j = 0; j != 8; ++j)
           ycbcr[i][j] = ycbcr[i][j] / 8;
@@ -200,9 +200,9 @@ static void slow_jpeg_decode(
   }
 }
 
-static void pred_calc(const predict_t &prev, const predict_t& pred) {
+static void predCalc(const predict_t &prev, const predict_t& pred) {
   // XXX TODO
-  throw std::runtime_error("pred_calc not done yet");
+  throw std::runtime_error("predCalc not done yet");
 }
 
 class mpeg_parser {
@@ -629,7 +629,7 @@ bool mpeg_parser::picture() {
     }
   }
 
-  slow_jpeg_decode(
+  slowJpegDecode(
     this->C->rgb,
     &this->video_cxt,
     &this->pic_cxt,
