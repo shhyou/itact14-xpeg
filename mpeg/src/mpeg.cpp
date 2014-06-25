@@ -200,7 +200,11 @@ static void slowJpegDecode(
   }
 }
 
-static void predCalc(const predict_t &prev, const predict_t& pred) {
+static void predCalc(
+  const predict_t &prev,
+  const predict_t& pred,
+  const motion_code_t motion)
+{
   // XXX TODO
   throw std::runtime_error("predCalc not done yet");
 }
@@ -224,7 +228,7 @@ class mpeg_parser {
   picbuf_t *F, *C, *B;
 
   // utilities
-  void debug_output(uint8_t buf[]);
+  void debugOutput(uint8_t buf[]);
 
   uint32_t peekInt(size_t pos) {
     // bad code; note that `pos` is assumed to be **byte**-aligned
@@ -244,6 +248,7 @@ class mpeg_parser {
   void load_quantizer_matrix(int16_t (&mat)[64]);
   void copyMacroblock(uint8_t pels[], size_t mcroblk_addr);
   void copyMacroblock2(size_t mcroblk_addr);
+  void predCopy(uint8_t (&pel)[16][16][3], uint8_t past[], predict_t &prd);
 
   void next_start_code() {
     this->bitpos = (this->bitpos+7u)&(~7u);
@@ -253,6 +258,7 @@ class mpeg_parser {
 
   // real parsing
   void decodeIntraBlock(unsigned int mcroblk_addr);
+  void decodeNonIntraBlock(unsigned int mcroblk_addr);
   void readPredInfo(motion_code_t &motion, unsigned int _f, unsigned int _rsiz);
   bool picture();
   template<int pic_cod_typ> bool slice();
@@ -276,7 +282,7 @@ public:
   void parseGOPEnd();
 };
 
-void mpeg_parser::debug_output(uint8_t buf[]) {
+void mpeg_parser::debugOutput(uint8_t buf[]) {
   DEBUG_TRACE("");
 
   static int pic_cnt = -1;
@@ -379,6 +385,64 @@ void mpeg_parser::decodeIntraBlock(unsigned int mcroblk_addr) {
   }
 }
 
+void mpeg_parser::decodeNonIntraBlock(unsigned int mcroblk_addr) {
+  DEBUG_TRACE("");
+
+  this->mcroblk_cxts[mcroblk_addr].quantizer_scale = this->pic_cxt.quantizer_scale;
+
+  dprintf5("macroblock %d; quantizer_scale: %d non-intra\n", mcroblk_addr, this->mcroblk_cxts[mcroblk_addr].quantizer_scale);
+  for (int k = 0; k != 6; ++k) {
+    int16_t (&dct_zz)[8*8] = this->mcroblk_cxts[mcroblk_addr].dct_zz[k];
+    if (this->pic_cxt.coded_block_pattern&(0x20>>k)) {
+      dprintf5("   block %d:\n", k);
+      int i = 0;
+      for (;;) {
+        uint32_t m = this->peek16(this->bitpos);
+        if ((m&0xc000) == 0x8000) { // EOB = '10'
+          this->bitpos += 2;
+          break;
+        } else {
+          int len, run, level;
+          if ((m&0xfc00) == 0x0400) { // escape = '0000 01'
+            run = this->peek16(this->bitpos+6) >> (16 - 6);
+            int m_ = this->peek16(this->bitpos+12);
+            int msk = ((m_ << 16) >> 31) & 0xffffff00;
+            if (m_ & 0x7f00) {
+              level = msk | (m_ >> 8);
+              len = 6 + 6 + 8;
+            } else {
+              level = msk | m_;
+              len = 6 + 6 + 16;
+            }
+          } else {
+            int (&huff_dc_coef)[65536][3] = i?huff_dc_coef_next:huff_dc_coef_first;
+            len = huff_dc_coef[m][0];
+            run = huff_dc_coef[m][1];
+            level = huff_dc_coef_next[m][2];
+            if (TEST_BIT(this->bitbuf, this->bitpos+len))
+              level = -level;
+            ++len;
+          }
+          this->bitpos += len;
+          if (i) {
+            // decode AC
+            i += run + 1;
+            assert(i <= 63);
+            dct_zz[i] = level;
+            dprintf5("      coef_next: run=%d, level=%d; m=%04x\n", run, level, m);
+          } else {
+            // decode DC
+            i += run;
+            assert(i <= 63);
+            dct_zz[i] = level;
+            dprintf5("      coef_frst: run=%d, level=%d; m=%04x\n", run, level, m);
+          }
+        }
+      }
+    }
+  }
+}
+
 void mpeg_parser::copyMacroblock(uint8_t pels[], size_t mcroblk_addr) {
   const int padded_width = (this->video_cxt.width*3+3)/4*4;
   int y0 = (mcroblk_addr/this->video_cxt.w_mcroblk_cnt)*16;
@@ -431,6 +495,15 @@ inline void mpeg_parser::readPredInfo(
   }
 }
 
+inline void mpeg_parser::predCopy(
+  uint8_t (&pel)[16][16][3],
+  uint8_t src[],
+  predict_t &prd)
+{
+  // XXX TODOs
+  throw std::logic_error("predCopy not impl'd");
+}
+
 template<int pic_cod_typ>
 bool mpeg_parser::slice() {
   DEBUG_TRACE("");
@@ -479,6 +552,7 @@ bool mpeg_parser::slice() {
         for (size_t k = mcroblk_addr-skipped_cnt-1; k != mcroblk_addr; ++k) {
           this->copyMacroblock(this->F->rgb, k);
           // no need to clear mcroblk_cxt here: they're zeroed out
+          this->mcroblk_cxts[k].flags |= MACROBLOCK_SKIPPED;
         }
         std::memset(&this->f_prev_prd, 0, sizeof(predict_t));
       } else if (pic_cod_typ == 3) {
@@ -507,9 +581,14 @@ bool mpeg_parser::slice() {
       }
       continue;
     }
-    // TODO: add huffman tbls
+
+    uint8_t f_pels[16][16][3];
+    uint8_t b_pels[16][16][3];
+
     if (mcroblk_typ->f_motion) {
       this->readPredInfo(this->pic_cxt.forward, this->pic_cxt.f_f, this->pic_cxt.f_rsiz);
+      predCalc(this->f_prev_prd, this->f_prd, this->pic_cxt.forward);
+      this->predCopy(f_pels, this->F->rgb, this->f_prd);
     } else {
       if (pic_cod_typ == 2) { // P-frame reset
         std::memset(&this->f_prd, 0, sizeof(predict_t));
@@ -517,8 +596,11 @@ bool mpeg_parser::slice() {
         this->f_prd = this->f_prev_prd;
       }
     }
+
     if (mcroblk_typ->b_motion) {
       this->readPredInfo(this->pic_cxt.backward, this->pic_cxt.b_f, this->pic_cxt.b_rsiz);
+      predCalc(this->b_prd, this->b_prev_prd, this->pic_cxt.backward);
+      this->predCopy(b_pels, this->B->rgb, this->b_prd);
     } else {
       if (pic_cod_typ == 2) { // P-frame reset
         std::memset(&this->b_prd, 0, sizeof(predict_t));
@@ -526,11 +608,16 @@ bool mpeg_parser::slice() {
         this->b_prd = this->b_prev_prd;
       }
     }
+
     if (mcroblk_typ->pattern) {
-      // XXX TODO
-      throw std::logic_error("pattern not impl'd)");
+      uint32_t m = this->peek16(this->bitpos);
+      this->bitpos += huff_cbp[m][0];
+      this->pic_cxt.coded_block_pattern = huff_cbp[m][1];
+    } else {
+      this->pic_cxt.coded_block_pattern = 0;
     }
 
+    this->decodeNonIntraBlock(mcroblk_addr);
     // XXX TODO: copy reconstructed block
     throw std::logic_error("TODO: copy reconstructed block");
     this->f_prev_prd = this->f_prd;
@@ -598,7 +685,7 @@ bool mpeg_parser::picture() {
 #if defined(DISPLAY)
     gldraw(this->F->rgb);
 #else
-    this->debug_output(this->F->rgb);
+    this->debugOutput(this->F->rgb);
 #endif
 #if DEBUG_LEVEL > 1
     static int ___cnt = 0;
@@ -640,7 +727,7 @@ bool mpeg_parser::picture() {
 #if defined(DISPLAY)
     gldraw(this->C->rgb);
 #else
-    this->debug_output(this->C->rgb);
+    this->debugOutput(this->C->rgb);
 #endif
   } else { // I frame or P frame
     std::swap(this->C, this->B);

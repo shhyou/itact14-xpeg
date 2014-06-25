@@ -58,10 +58,12 @@ struct pic_cxt_t {
 
   // macroblock data
   motion_code_t forward, backward;
+  int coded_block_pattern;
 };
 
-#define MACROBLOCK_SKIPPED      2
-#define MACROBLOCK_INTRA        1
+#define MACROBLOCK_SKIPPED      0x040
+#define MACROBLOCK_INTRA        0x080
+#define MACROBLOCK_PRED_FRAME   0x100
 
 struct mcroblk_cxt_t {
   int flags                     __attribute__ ((aligned(32)));

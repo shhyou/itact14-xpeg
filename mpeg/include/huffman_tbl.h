@@ -389,7 +389,7 @@ static void init_huff_cbp() {
     int bit = huff_cbp_init[k][0];
     int len = huff_cbp_init[k][1];
     int val = huff_cbp_init[k][2];
-    for (size_t j = 0; j != (1<<(16-len)); ++j) {
+    for (int j = 0; j != (1<<(16-len)); ++j) {
       huff_cbp[bit|j][0] = len;
       huff_cbp[bit|j][1] = val;
     }
@@ -438,7 +438,7 @@ static void init_huff_motion_vec() {
     int bit = huff_motion_vec_init[k][0];
     int len = huff_motion_vec_init[k][1];
     int val = huff_motion_vec_init[k][2];
-    for (size_t j = 0; j != (1<<(16-len)); ++j) {
+    for (int j = 0; j != (1<<(16-len)); ++j) {
       huff_motion_vec[bit|j][0] = len;
       huff_motion_vec[bit|j][1] = val;
     }
