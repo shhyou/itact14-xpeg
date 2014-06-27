@@ -1,5 +1,7 @@
 #pragma once
 
+#include "debugutils.h"
+
 #include <cstring>
 #include <cassert>
 

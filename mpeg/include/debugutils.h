@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cstdio>
+#include <ctime>
+
 #define DPRINTF_IMPL(...) std::fprintf(stderr, __VA_ARGS__);
 
 #if DEBUG_LEVEL >= 5
