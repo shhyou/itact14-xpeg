@@ -121,8 +121,8 @@ class mpeg_parser {
 
   void skipExtensionsAndUserData();
   void load_quantizer_matrix(std::int16_t (&mat)[64]);
-  void copyMacroblock(picbuf_t &picbuf, std::size_t mcroblk_addr);
-  void copyMacroblock2(std::size_t mcroblk_addr);
+  void copyMacroblock(int (&ycbcr)[6][8][8], std::size_t mcroblk_addr);
+  void copyMacroblock2(int (&f_ycbcr)[6][8][8], int (&b_ycbcr)[6][8][8], std::size_t mcroblk_addr);
   void predCopy(unsigned int mcroblk_addr, int (&pel)[6][8][8], picbuf_t &past, predict_t &prd);
 
   void next_start_code() {

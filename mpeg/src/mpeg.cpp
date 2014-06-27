@@ -472,22 +472,20 @@ void mpeg_parser::decodeNonIntraBlock(unsigned int mcroblk_addr) {
   }
 }
 
-void mpeg_parser::copyMacroblock(picbuf_t &picbuf, size_t mcroblk_addr) {
+inline void mpeg_parser::copyMacroblock(int (&ycbcr)[6][8][8], size_t mcroblk_addr) {
   int y0 = mcroblk_addr/this->video_cxt.w_mcroblk_cnt;
   int x0 = mcroblk_addr%this->video_cxt.w_mcroblk_cnt;
   std::memcpy(
     this->C->ycbcr[y0][x0],
-    picbuf.ycbcr[y0][x0],
-    sizeof(picbuf.ycbcr[0][0])
+    ycbcr,
+    sizeof(ycbcr)
   );
 }
 
-void mpeg_parser::copyMacroblock2(size_t mcroblk_addr) {
+inline void mpeg_parser::copyMacroblock2(int (&f_ycbcr)[6][8][8], int (&b_ycbcr)[6][8][8], size_t mcroblk_addr) {
   const int y0 = mcroblk_addr/this->video_cxt.w_mcroblk_cnt;
   const int x0 = mcroblk_addr%this->video_cxt.w_mcroblk_cnt;
   int (&c_ycbcr)[6][8][8] = this->C->ycbcr[y0][x0];
-  int (&f_ycbcr)[6][8][8] = this->F->ycbcr[y0][x0];
-  int (&b_ycbcr)[6][8][8] = this->B->ycbcr[y0][x0];
   for (int k = 0; k != 6; ++k) {
     for (int y = 0; y != 8; ++y) {
       for (int x = 0; x != 8; ++x) {
@@ -663,7 +661,9 @@ bool mpeg_parser::slice() {
     if (skipped_cnt > 0) {
       if (pic_cod_typ == 2) {
         for (size_t t = mcroblk_addr-skipped_cnt-1; t != mcroblk_addr; ++t) {
-          this->copyMacroblock(*this->F, t);
+          int y = t/this->video_cxt.w_mcroblk_cnt;
+          int x = t%this->video_cxt.w_mcroblk_cnt;
+          this->copyMacroblock(this->F->ycbcr[y][x], t);
           // no need to clear mcroblk_cxt here: they're zeroed out
           this->mcroblk_cxts[t].flags |= MACROBLOCK_SKIPPED;
         }
@@ -676,31 +676,15 @@ bool mpeg_parser::slice() {
           int f_pels[6][8][8];
           int b_pels[6][8][8];
 
-          if (this->pic_cxt.prev_f_motion) {
+          if (this->pic_cxt.prev_f_motion)
             this->predCopy(t, f_pels, *this->F, z_prd);
-          }
-
-          if (this->pic_cxt.prev_b_motion) {
+          if (this->pic_cxt.prev_b_motion)
             this->predCopy(t, b_pels, *this->B, z_prd);
-          }
 
-          int my = t/this->video_cxt.w_mcroblk_cnt;
-          int mx = t%this->video_cxt.w_mcroblk_cnt;
           if (this->pic_cxt.prev_f_motion && this->pic_cxt.prev_b_motion) {
-            for (int k = 0; k != 6; ++k) {
-              for (int y = 0; y != 8; ++y) {
-                for (int x = 0; x != 8; ++x) {
-                  this->C->ycbcr[my][mx][k][y][x] =
-                    (f_pels[k][y][x] + b_pels[k][y][x])/2;
-                }
-              }
-            }
+            this->copyMacroblock2(f_pels, b_pels, t);
           } else {
-            std::memcpy(
-              this->C->ycbcr[my][mx],
-              this->pic_cxt.prev_f_motion? f_pels : b_pels,
-              sizeof(this->C->ycbcr[my][mx])
-            );
+            this->copyMacroblock(this->pic_cxt.prev_f_motion? f_pels : b_pels, t);
           }
         }
       }
@@ -796,29 +780,12 @@ bool mpeg_parser::slice() {
 #endif
 
     {
-      int mcroblk_y = mcroblk_addr/this->video_cxt.w_mcroblk_cnt;
-      int mcroblk_x = mcroblk_addr%this->video_cxt.w_mcroblk_cnt;
       if (pic_cod_typ == 2) {
-        std::memcpy(
-          this->C->ycbcr[mcroblk_y][mcroblk_x],
-          f_pels,
-          sizeof(this->C->ycbcr[mcroblk_y][mcroblk_x])
-        );
+        this->copyMacroblock(f_pels, mcroblk_addr);
       } else if (mcroblk_typ->f_motion && mcroblk_typ->b_motion) {
-        for (int k = 0; k != 6; ++k) {
-          for (int y = 0; y != 8; ++y) {
-            for (int x = 0; x != 8; ++x) {
-              this->C->ycbcr[mcroblk_y][mcroblk_x][k][y][x] =
-                (f_pels[k][y][x] + b_pels[k][y][x])/2;
-            }
-          }
-        }
+        this->copyMacroblock2(f_pels, b_pels, mcroblk_addr);
       } else {
-        std::memcpy(
-          this->C->ycbcr[mcroblk_y][mcroblk_x],
-          mcroblk_typ->f_motion? f_pels : b_pels,
-          sizeof(this->C->ycbcr[mcroblk_y][mcroblk_x])
-        );
+        this->copyMacroblock(mcroblk_typ->f_motion? f_pels : b_pels,mcroblk_addr);
       }
     }
 
